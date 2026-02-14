@@ -30,58 +30,114 @@ def init_db():
     conn.close()
     print("✅ База данных готова")
 
-# ==================== ПАРСИНГ ====================
+# ==================== ПАРСИНГ С ЛОГАМИ ====================
 def get_winner_suit(text: str) -> dict:
-    if not text or "✅" not in text:
+    """Возвращает {'num': int, 'suit': str} или None"""
+    
+    print(f"🔍 Получено сообщение: {text[:50]}...")
+    
+    if not text:
+        print("❌ Текст пустой")
         return None
+        
+    if "✅" not in text:
+        print("❌ Нет ✅ в тексте")
+        return None
+        
     if "#R" in text or "🔰" in text:
+        print("❌ Есть #R или 🔰")
         return None
 
     game_match = re.search(r"#N(\d+)", text)
     if not game_match:
+        print("❌ Не найден номер игры")
         return None
     game_num = int(game_match.group(1))
+    print(f"✅ Номер игры: {game_num}")
 
-    if "✅" in text.split("-")[0]:
-        winner_part = text.split("-")[0]
+    # Определяем победителя
+    parts = text.split("-")
+    if len(parts) != 2:
+        print("❌ Не могу разделить на игрока и банкира")
+        return None
+        
+    if "✅" in parts[0]:
+        winner_part = parts[0]
+        print(f"✅ Победитель: игрок (часть: {winner_part[:30]}...)")
     else:
-        winner_part = text.split("-")[1]
+        winner_part = parts[1]
+        print(f"✅ Победитель: банкир (часть: {winner_part[:30]}...)")
 
     cards_match = re.search(r"\(([^)]+)\)", winner_part)
     if not cards_match:
+        print("❌ Не найдены карты в скобках")
         return None
+        
+    cards_text = cards_match.group(1)
+    print(f"✅ Карты победителя: {cards_text}")
 
-    cards = re.findall(r'(\d{1,2}|[AKQJ])', cards_match.group(1))
+    cards = re.findall(r'(\d{1,2}|[AKQJ])', cards_text)
+    print(f"✅ Найденные номиналы: {cards}")
+    
     if len(cards) != 3:
+        print(f"❌ У победителя не 3 карты, а {len(cards)}")
         return None
 
-    third_card_with_suit = re.findall(rf"{cards[2]}([♥♠♣♦])", cards_match.group(1))
-    if not third_card_with_suit:
+    # Ищем масть третьей карты
+    third_card = cards[2]
+    print(f"🔍 Ищем масть для карты {third_card}")
+    
+    # Паттерн: цифра/буква + масть (♥♠♣♦)
+    suit_match = re.search(rf"{third_card}([♥♠♣♦])", cards_text)
+    if not suit_match:
+        print(f"❌ Не найдена масть для карты {third_card}")
         return None
+        
+    suit = suit_match.group(1)
+    print(f"✅ Масть третьей карты: {suit}")
 
     return {
         "num": game_num,
-        "suit": third_card_with_suit[0]
+        "suit": suit
     }
 
 # ==================== ОСНОВНАЯ ЛОГИКА ====================
 def handle_input(update: Update, context: CallbackContext):
     try:
-        if update.channel_post and update.channel_post.chat_id == INPUT_CHANNEL_ID:
-            game = get_winner_suit(update.channel_post.text)
-            if game:
-                target = game["num"] + 10
-                msg = f"🎯 Масть: {game['suit']}\n#{game['num']} → #{target}"
-                context.bot.send_message(chat_id=OUTPUT_CHANNEL_ID, text=msg)
+        print("📩 Получено обновление")
+        
+        if not update.channel_post:
+            print("❌ Это не канальное сообщение")
+            return
+            
+        if update.channel_post.chat_id != INPUT_CHANNEL_ID:
+            print(f"❌ Чат ID {update.channel_post.chat_id} не совпадает с INPUT_CHANNEL_ID {INPUT_CHANNEL_ID}")
+            return
+            
+        print(f"📨 Сообщение из канала: {update.channel_post.text[:100]}...")
+        
+        game = get_winner_suit(update.channel_post.text)
+        if not game:
+            print("❌ Игра не подходит для прогноза")
+            return
 
-                conn = sqlite3.connect('predictions.db')
-                c = conn.cursor()
-                c.execute('''INSERT INTO games (game_num, winner, winner_suit, target_game, status, created_at)
-                             VALUES (?, ?, ?, ?, ?, ?)''',
-                          (game["num"], "✅", game["suit"], target, "pending", datetime.now()))
-                conn.commit()
-                conn.close()
-                print(f"✅ Прогноз #{game['num']} → масть {game['suit']}")
+        target = game["num"] + 10
+        msg = f"🎯 Масть: {game['suit']}\n#{game['num']} → #{target}"
+        
+        print(f"📤 Отправляю: {msg}")
+        context.bot.send_message(chat_id=OUTPUT_CHANNEL_ID, text=msg)
+        print("✅ Сообщение отправлено")
+
+        # Сохраняем в базу
+        conn = sqlite3.connect('predictions.db')
+        c = conn.cursor()
+        c.execute('''INSERT INTO games (game_num, winner, winner_suit, target_game, status, created_at)
+                     VALUES (?, ?, ?, ?, ?, ?)''',
+                  (game["num"], "✅", game["suit"], target, "pending", datetime.now()))
+        conn.commit()
+        conn.close()
+        print(f"✅ Прогноз #{game['num']} → масть {game['suit']} сохранён в БД")
+
     except Exception as e:
         print(f"❌ Ошибка: {e}")
 
