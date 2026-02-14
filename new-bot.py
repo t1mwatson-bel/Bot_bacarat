@@ -15,9 +15,9 @@ from telegram.ext import (
 )
 
 # === НАСТРОЙКИ ===
-TOKEN = "YOUR_TOKEN_HERE"  # ВСТАВЬ СВОЙ ТОКЕН ДЛЯ ВТОРОГО БОТА
+TOKEN = "1163348874:AAFgZEXveILvD4MbhQ8jiLTwIxs4puYhmq0"
 INPUT_CHANNEL_ID = -1003469691743
-OUTPUT_CHANNEL_ID = -1003855079501
+OUTPUT_CHANNEL_ID = -1003842401391
 ADMIN_ID = 683219603
 
 MAX_GAME_NUMBER = 1440
