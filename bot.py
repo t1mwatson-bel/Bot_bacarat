@@ -1,24 +1,18 @@
 from telegram import Update
-from telegram.ext import CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 import re
 from datetime import datetime
-import asyncio
 import time
 import sqlite3
 import os
 
 # ==================== НАСТРОЙКИ ====================
-TOKEN = os.getenv("TOKEN", "1163348874:AAHtWt2ahW2CS92LbFlIQ2x6pT-YYrIe0mI") 
+TOKEN = os.getenv("TOKEN", "1163348874:AAHtWt2ahW2CS92LbFlIQ2x6pT-YYrIe0mI")
 INPUT_CHANNEL_ID = int(os.getenv("INPUT_CHANNEL_ID", "-1003469691743"))
 OUTPUT_CHANNEL_ID = int(os.getenv("OUTPUT_CHANNEL_ID", "-1003855079501"))
 ADMIN_ID = int(os.getenv("ADMIN_ID", "683219603"))
 
-MESSAGE_DELAY = 2.0
-MAX_MESSAGES_PER_MINUTE = 20
-
 predictions = {}
-last_message_time = 0
-message_times = []
 
 # ==================== БАЗА ДАННЫХ ====================
 def init_db():
@@ -38,7 +32,6 @@ def init_db():
 
 # ==================== ПАРСИНГ ====================
 def get_winner_suit(text: str) -> dict:
-    """Возвращает {'num': int, 'suit': str} или None"""
     if not text or "✅" not in text:
         return None
     if "#R" in text or "🔰" in text:
@@ -49,7 +42,6 @@ def get_winner_suit(text: str) -> dict:
         return None
     game_num = int(game_match.group(1))
 
-    # Определяем победителя
     if "✅" in text.split("-")[0]:
         winner_part = text.split("-")[0]
     else:
@@ -63,7 +55,6 @@ def get_winner_suit(text: str) -> dict:
     if len(cards) != 3:
         return None
 
-    # Ищем масть третьей карты
     third_card_with_suit = re.findall(rf"{cards[2]}([♥♠♣♦])", cards_match.group(1))
     if not third_card_with_suit:
         return None
@@ -74,66 +65,43 @@ def get_winner_suit(text: str) -> dict:
     }
 
 # ==================== ОСНОВНАЯ ЛОГИКА ====================
-async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_input(update: Update, context: CallbackContext):
     try:
-        if not update.channel_post or update.channel_post.chat.id != INPUT_CHANNEL_ID:
-            return
+        if update.channel_post and update.channel_post.chat_id == INPUT_CHANNEL_ID:
+            game = get_winner_suit(update.channel_post.text)
+            if game:
+                target = game["num"] + 10
+                msg = f"🎯 Масть: {game['suit']}\n#{game['num']} → #{target}"
+                context.bot.send_message(chat_id=OUTPUT_CHANNEL_ID, text=msg)
 
-        game = get_winner_suit(update.channel_post.text)
-        if not game:
-            return
-
-        target = game["num"] + 10
-        msg = f"🎯 Масть: {game['suit']}\n#{game['num']} → #{target}"
-        await safe_send_message(context.bot, OUTPUT_CHANNEL_ID, msg)
-
-        # Сохраняем в базу
-        conn = sqlite3.connect('predictions.db')
-        c = conn.cursor()
-        c.execute('''INSERT INTO games (game_num, winner, winner_suit, target_game, status, created_at)
-                     VALUES (?, ?, ?, ?, ?, ?)''',
-                  (game["num"], "✅", game["suit"], target, "pending", datetime.now()))
-        conn.commit()
-        conn.close()
-        print(f"✅ Прогноз #{game['num']} → масть {game['suit']}")
-
+                conn = sqlite3.connect('predictions.db')
+                c = conn.cursor()
+                c.execute('''INSERT INTO games (game_num, winner, winner_suit, target_game, status, created_at)
+                             VALUES (?, ?, ?, ?, ?, ?)''',
+                          (game["num"], "✅", game["suit"], target, "pending", datetime.now()))
+                conn.commit()
+                conn.close()
+                print(f"✅ Прогноз #{game['num']} → масть {game['suit']}")
     except Exception as e:
         print(f"❌ Ошибка: {e}")
 
 # ==================== КОМАНДЫ ====================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def start(update: Update, context: CallbackContext):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("⛔ Доступ запрещён")
+        update.message.reply_text("⛔ Доступ запрещён")
         return
-    await update.message.reply_text("✅ Бот мастей работает")
-
-# ==================== АНТИ-ФЛУД ====================
-async def rate_limiter():
-    global last_message_time, message_times
-    current_time = time.time()
-    message_times = [t for t in message_times if current_time - t < 60]
-    if len(message_times) >= MAX_MESSAGES_PER_MINUTE:
-        await asyncio.sleep(60 - (current_time - message_times[0]))
-    if current_time - last_message_time < MESSAGE_DELAY:
-        await asyncio.sleep(MESSAGE_DELAY - (current_time - last_message_time))
-    last_message_time = time.time()
-    message_times.append(last_message_time)
-
-async def safe_send_message(bot, chat_id, text):
-    try:
-        await rate_limiter()
-        await bot.send_message(chat_id=chat_id, text=text)
-    except Exception as e:
-        print(f"❌ Ошибка отправки: {e}")
+    update.message.reply_text("✅ Бот мастей работает")
 
 # ==================== ЗАПУСК ====================
 def main():
     init_db()
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.Chat(INPUT_CHANNEL_ID) & filters.ChatType.CHANNEL, handle_input))
+    updater = Updater(TOKEN, use_context=True)
+    dp = updater.dispatcher
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(MessageHandler(Filters.chat(INPUT_CHANNEL_ID), handle_input))
     print("🚀 Бот мастей запущен")
-    app.run_polling()
+    updater.start_polling()
+    updater.idle()
 
 if __name__ == "__main__":
     main()
