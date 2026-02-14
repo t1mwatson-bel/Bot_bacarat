@@ -5,12 +5,20 @@ from datetime import datetime
 import time
 import sqlite3
 import os
+import logging
 
 # ==================== НАСТРОЙКИ ====================
 TOKEN = os.getenv("TOKEN", "1163348874:AAHtWt2ahW2CS92LbFlIQ2x6pT-YYrIe0mI")
 INPUT_CHANNEL_ID = int(os.getenv("INPUT_CHANNEL_ID", "-1003469691743"))
 OUTPUT_CHANNEL_ID = int(os.getenv("OUTPUT_CHANNEL_ID", "-1003855079501"))
 ADMIN_ID = int(os.getenv("ADMIN_ID", "683219603"))
+
+# ==================== ЛОГИРОВАНИЕ ====================
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # ==================== БАЗА ДАННЫХ ====================
 def init_db():
@@ -28,48 +36,77 @@ def init_db():
     conn.close()
     print("✅ База данных готова")
 
-# ==================== ПАРСИНГ ====================
-def get_winner_suit(text: str) -> dict:
-    """Максимально простой парсинг под твой канал"""
+# ==================== ПАРСИНГ (ВЗЯТ ИЗ РАБОЧЕГО КОДА) ====================
+def extract_game_data(text: str):
+    """Извлекает данные из игры (адаптировано из рабочего кода)"""
     
-    if not text or "✅" not in text:
+    if not text:
         return None
-    if "#R" in text or "🔰" in text:
+    
+    match = re.search(r'#N(\d+)', text)
+    if not match:
         return None
-
-    # Ищем номер игры
-    game_match = re.search(r"#N(\d+)", text)
-    if not game_match:
+    
+    game_num = int(match.group(1))
+    
+    # 🔥 ПРИЗНАКИ ЗАВЕРШЕННОЙ ИГРЫ:
+    has_check = '✅' in text
+    has_t = re.search(r'#T\d+', text) is not None
+    has_r = '#R' in text
+    has_x = '#X' in text
+    
+    is_completed = has_check or has_t or has_r or has_x
+    
+    if not is_completed:
+        logger.info(f"⏳ Игра #{game_num} не завершена")
         return None
-    game_num = int(game_match.group(1))
-
-    # Разделяем на левую и правую часть
-    if "-" not in text:
-        return None
-    left, right = text.split("-", 1)
-
-    # Определяем победителя
-    if "✅" in left:
-        winner_part = left
-    else:
-        winner_part = right
-
+    
+    # Находим левую часть (игрок)
+    left_part = text
+    if '-' in text:
+        left_part = text.split('-')[0]
+    elif '👉👈' in text:
+        left_part = text.split('👉👈')[0]
+    elif '👈👉' in text:
+        left_part = text.split('👈👉')[0]
+    elif '👉' in text:
+        left_part = text.split('👉')[0]
+    elif '👈' in text:
+        left_part = text.split('👈')[0]
+    
     # Ищем карты в скобках
-    cards_match = re.search(r"\(([^)]+)\)", winner_part)
+    cards_match = re.search(r'\(([^)]+)\)', left_part)
     if not cards_match:
+        logger.info(f"❌ Не найдены карты в скобках")
         return None
-
-    cards_text = cards_match.group(1).strip()
-    card_list = cards_text.split()
-
-    if len(card_list) != 3:
-        return None
-
-    third_card = card_list[2]
-    # Масть — последний символ третьей карты
-    suit = third_card[-1]
-
-    return {"num": game_num, "suit": suit}
+    
+    cards_text = cards_match.group(1)
+    
+    # Извлекаем все масти из текста карт
+    suits = []
+    suit_patterns = {
+        '♥️': r'[♥❤♡]',
+        '♠️': r'[♠♤]',
+        '♣️': r'[♣♧]',
+        '♦️': r'[♦♢]'
+    }
+    
+    for suit_emoji, pattern in suit_patterns.items():
+        if re.search(pattern, cards_text):
+            suits.append(suit_emoji)
+    
+    logger.info(f"✅ Игра #{game_num} завершена, масти: {suits}")
+    
+    if len(suits) >= 3:
+        third_card_suit = suits[2]
+        return {
+            "num": game_num,
+            "suit": third_card_suit,
+            "all_suits": suits,
+            "has_3_cards": True
+        }
+    
+    return None
 
 # ==================== ОСНОВНАЯ ЛОГИКА ====================
 def handle_input(update: Update, context: CallbackContext):
@@ -84,8 +121,8 @@ def handle_input(update: Update, context: CallbackContext):
         if not text:
             return
 
-        game = get_winner_suit(text)
-        if not game:
+        game = extract_game_data(text)
+        if not game or not game.get("has_3_cards"):
             return
 
         target = game["num"] + 10
