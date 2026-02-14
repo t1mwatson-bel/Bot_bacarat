@@ -15,7 +15,7 @@ from telegram.ext import (
 )
 
 # === НАСТРОЙКИ ===
-TOKEN = "5482422004:AAHKwdpP9ARXWDhhuqqO_9rDKRjjH7rePZs"
+TOKEN = "1163348874:AAHtWt2ahW2CS92LbFlIQ2x6pT-YYrIe0mI"
 INPUT_CHANNEL_ID = -1003469691743
 OUTPUT_CHANNEL_ID = -1003855079501
 ADMIN_ID = 683219603
@@ -59,6 +59,9 @@ logger = logging.getLogger(__name__)
 
 # === ХРАНИЛИЩЕ ИГР В ПРОЦЕССЕ ===
 pending_games = {}  # Игры, которые еще не завершены, но уже имеют карты
+
+# ========== НОВОЕ ХРАНИЛИЩЕ ДЛЯ ОБНОВЛЕНИЯ ПРОГНОЗОВ ==========
+prediction_messages = {}  # ключ: номер игры -> список прогнозов, которые её ждут
 
 # === УНИВЕРСАЛЬНЫЙ ПАРСЕР ДЛЯ ЛЮБОГО РАЗДЕЛИТЕЛЯ ===
 class UniversalGameParser:
@@ -464,6 +467,9 @@ async def check_all_predictions(game_num, game_data, context):
                     prediction['found_in_cards'] = found_cards
                     prediction['win_announced'] = True
                     
+                    # ========== НОВОЕ: обновляем сообщение о заходе ==========
+                    await update_prediction_message_win(prediction, game_num, context)
+                    
                     await handle_prediction_result(prediction, game_num, 'win', context)
                 else:
                     logger.info(f"❌ Масть {check_suit} не найдена ни в одной карте")
@@ -476,6 +482,47 @@ async def check_all_predictions(game_num, game_data, context):
                         next_game = prediction['check_games'][prediction['attempt']]
                         logger.info(f"🔄 Переход к догону {prediction['attempt']}")
                         await update_dogon_message(prediction, context)
+
+# ========== НОВАЯ ФУНКЦИЯ ДЛЯ ОБНОВЛЕНИЯ СООБЩЕНИЯ ПРИ ЗАХОДЕ ==========
+async def update_prediction_message_win(prediction, game_num, context):
+    """Обновляет сообщение в канале, когда прогноз зашёл"""
+    try:
+        if not prediction.get('channel_message_id'):
+            return
+            
+        # Определяем, на какой попытке зашло
+        attempt_names = ["основной игре", "догоне 1", "догоне 2"]
+        attempt_name = attempt_names[prediction['attempt']] if prediction['attempt'] < 3 else "догоне"
+        
+        win_phrase = get_win_phrase()
+        
+        cards_info = ""
+        if prediction.get('found_in_cards'):
+            cards_list = ", ".join([f"#{card}" for card in prediction['found_in_cards']])
+            cards_info = f"┣ 🃏 Найдена в картах: {cards_list}\n"
+        
+        new_text = (
+            f"{win_phrase}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"🏆 *ПРОГНОЗ #{prediction['id']} ЗАШЁЛ!*\n\n"
+            f"✅ *РЕЗУЛЬТАТ:*\n"
+            f"┣ 🎯 Масть {prediction['original_suit']} подтверждена\n"
+            f"┣ 🎮 Игра: #{game_num}\n"
+            f"┣ 🔄 Попытка: {attempt_name}\n"
+            f"{cards_info}"
+            f"┗ ⭐ Статус: УСПЕХ"
+        )
+        
+        await context.bot.edit_message_text(
+            chat_id=OUTPUT_CHANNEL_ID,
+            message_id=prediction['channel_message_id'],
+            text=new_text,
+            parse_mode='Markdown'
+        )
+        logger.info(f"✅ Сообщение прогноза #{prediction['id']} обновлено (заход)")
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка обновления сообщения: {e}")
 
 async def update_dogon_message(prediction, context):
     try:
@@ -522,64 +569,42 @@ async def handle_prediction_result(prediction, game_num, result, context):
     else:
         storage.strategy2_stats['losses'] += 1
     
-    await update_prediction_message(prediction, context)
+    if result == 'loss':
+        await update_prediction_message_loss(prediction, context)
     
     if prediction['target_game'] in storage.strategy2_predictions:
         del storage.strategy2_predictions[prediction['target_game']]
 
-async def update_prediction_message(prediction, context):
+# ========== НОВАЯ ФУНКЦИЯ ДЛЯ ОБНОВЛЕНИЯ СООБЩЕНИЯ ПРИ ПРОИГРЫШЕ ==========
+async def update_prediction_message_loss(prediction, context):
+    """Обновляет сообщение в канале, когда прогноз не зашёл"""
     try:
-        if prediction['status'] == 'win':
-            win_phrase = get_win_phrase()
+        if not prediction.get('channel_message_id'):
+            return
             
-            if prediction['attempt'] == 0:
-                attempt_text = "Основная игра"
-            elif prediction['attempt'] == 1:
-                attempt_text = "Догон 1"
-            else:
-                attempt_text = "Догон 2"
-            
-            cards_info = ""
-            if prediction.get('found_in_cards'):
-                cards_list = ", ".join([f"#{card}" for card in prediction['found_in_cards']])
-                cards_info = f"┣ 🃏 Найдена в картах: {cards_list}\n"
-            
-            new_text = (
-                f"{win_phrase}\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"🏆 *СТРАТЕГИЯ СРАБОТАЛА! #{prediction['id']}*\n\n"
-                f"✅ *РЕЗУЛЬТАТ:*\n"
-                f"┣ 🎯 Прогноз подтверждён на {attempt_text}!\n"
-                f"┣ 🎮 Победная игра: #{prediction['result_game']}\n"
-                f"┣ 🎲 Найдена масть: {prediction['original_suit']}\n"
-                f"┣ 🔢 Всего попыток: {prediction['attempt'] + 1}\n"
-                f"{cards_info}"
-                f"┗ ⭐ Статус: УСПЕХ"
-            )
-        else:
-            loss_phrase = get_loss_phrase()
-            
-            new_text = (
-                f"{loss_phrase}\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"😔 *СТРАТЕГИЯ НЕ СРАБОТАЛА #{prediction['id']}*\n\n"
-                f"💔 *РЕЗУЛЬТАТ:*\n"
-                f"┣ 🎯 Прогноз не подтвердился\n"
-                f"┣ 🎮 Проверено игр: 3\n"
-                f"┣ 🎲 Искали масть: {prediction['original_suit']}\n"
-                f"┗ ❌ Статус: НЕУДАЧА"
-            )
+        loss_phrase = get_loss_phrase()
         
-        if prediction.get('channel_message_id'):
-            await context.bot.edit_message_text(
-                chat_id=OUTPUT_CHANNEL_ID,
-                message_id=prediction['channel_message_id'],
-                text=new_text,
-                parse_mode='Markdown'
-            )
+        new_text = (
+            f"{loss_phrase}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"😔 *ПРОГНОЗ #{prediction['id']} НЕ ЗАШЁЛ*\n\n"
+            f"💔 *РЕЗУЛЬТАТ:*\n"
+            f"┣ 🎯 Масть {prediction['original_suit']} не появилась\n"
+            f"┣ 🎮 Проверено игр: {len(prediction['check_games'])}\n"
+            f"┣ 🔄 Попыток: {prediction['attempt'] + 1}\n"
+            f"┗ ❌ Статус: НЕУДАЧА"
+        )
+        
+        await context.bot.edit_message_text(
+            chat_id=OUTPUT_CHANNEL_ID,
+            message_id=prediction['channel_message_id'],
+            text=new_text,
+            parse_mode='Markdown'
+        )
+        logger.info(f"✅ Сообщение прогноза #{prediction['id']} обновлено (проигрыш)")
         
     except Exception as e:
-        logger.error(f"❌ Ошибка: {e}")
+        logger.error(f"❌ Ошибка обновления сообщения: {e}")
 
 async def send_prediction_to_channel(prediction, context):
     try:
@@ -608,6 +633,17 @@ async def send_prediction_to_channel(prediction, context):
         )
         
         prediction['channel_message_id'] = message.message_id
+        
+        # ========== НОВОЕ: сохраняем ID сообщения для будущих обновлений ==========
+        global prediction_messages
+        for check_game in prediction['check_games']:
+            if check_game not in prediction_messages:
+                prediction_messages[check_game] = []
+            prediction_messages[check_game].append({
+                'message_id': message.message_id,
+                'prediction_id': prediction['id'],
+                'suit': prediction['original_suit']
+            })
         
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
@@ -669,6 +705,7 @@ def main():
     print("✅ ИЩЕТ МАСТИ ВО ВСЕХ КАРТАХ")
     print("✅ РАСПОЗНАЕТ #T С ЛЮБОЙ ЦИФРОЙ (#T0, #T1, #T2, #T3, #T4, #T5, #T6, #T7, #T8, #T9)")
     print("✅ НЕ СОЗДАЕТ ПРОГНОЗЫ ПОСЛЕ #R (СДЕЛКИ)")
+    print("✅ ОБНОВЛЯЕТ СООБЩЕНИЯ ПРИ ЗАХОДЕ ИЛИ ПРОИГРЫШЕ")
     print("="*60)
     
     logger.info("🤖 Бот запущен...")
