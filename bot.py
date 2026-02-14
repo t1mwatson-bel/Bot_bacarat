@@ -7,7 +7,7 @@ import sqlite3
 import os
 
 # ==================== НАСТРОЙКИ ====================
-TOKEN = os.getenv("TOKEN", "1163348874:AAHtWt2ahW2CS92LbFlIQ2x6pT-YYrIe0mI")
+TOKEN = os.getenv("TOKEN", "1163348874:AAG6vKHpcOfT9eCKQ6EB0_RuUjFCkPyUJjw")
 INPUT_CHANNEL_ID = int(os.getenv("INPUT_CHANNEL_ID", "-1003469691743"))
 OUTPUT_CHANNEL_ID = int(os.getenv("OUTPUT_CHANNEL_ID", "-1003855079501"))
 ADMIN_ID = int(os.getenv("ADMIN_ID", "683219603"))
