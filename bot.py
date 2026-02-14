@@ -15,14 +15,13 @@ from telegram.ext import (
 )
 
 # === НАСТРОЙКИ ===
-TOKEN = "5482422004:AAHKwdpP9ARXWDhhuqqO_9rDKRjjH7rePZs"
+TOKEN = "1163348874:AAHtWt2ahW2CS92LbFlIQ2x6pT-YYrIe0mI"
 INPUT_CHANNEL_ID = -1003469691743
 OUTPUT_CHANNEL_ID = -1003855079501
 ADMIN_ID = 683219603
 
 MAX_GAME_NUMBER = 1440
 
-# Фразы для прогнозов
 FUNNY_PHRASES = [
     "🎰 ВА-БАНК! ОБНАРУЖЕН СУПЕР ПАТТЕРН! 🎰",
     "🚀 РАКЕТА ЗАПУЩЕНА! ЛЕТИМ ЗА ПОБЕДОЙ! 🚀",
@@ -47,27 +46,20 @@ LOSS_PHRASES = [
     "🤡 ЦИРК ВЕРНУЛСЯ... ШУТКА НЕ УДАЛАСЬ"
 ]
 
-# Масти
 SUITS = ["♥️", "♠️", "♣️", "♦️"]
 
-# === ЛОГИРОВАНИЕ ===
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# === ХРАНИЛИЩЕ ИГР В ПРОЦЕССЕ ===
-pending_games = {}  # Игры, которые еще не завершены, но уже имеют карты
+pending_games = {}
+prediction_messages = {}
 
-# ========== НОВОЕ ХРАНИЛИЩЕ ДЛЯ ОБНОВЛЕНИЯ ПРОГНОЗОВ ==========
-prediction_messages = {}  # ключ: номер игры -> список прогнозов, которые её ждут
-
-# === УНИВЕРСАЛЬНЫЙ ПАРСЕР ДЛЯ ЛЮБОГО РАЗДЕЛИТЕЛЯ ===
 class UniversalGameParser:
     @staticmethod
     def extract_game_data(text: str):
-        """ИЗВЛЕКАЕТ ДАННЫЕ ИЗ ЛЮБОГО ФОРМАТА ИГРЫ"""
         logger.info(f"🔍 Парсим: {text[:150]}...")
         
         match = re.search(r'#N(\d+)', text)
@@ -77,43 +69,26 @@ class UniversalGameParser:
         game_num = int(match.group(1))
         has_r_tag = '#R' in text
         has_x_tag = '#X' in text or '#X🟡' in text
-        
-        # 🔥 ПРИЗНАКИ ЗАВЕРШЕННОЙ ИГРЫ:
         has_check = '✅' in text
-        # 🔥 ЛЮБОЙ #T с ЛЮБОЙ цифрой считается завершением игры
         has_t = re.search(r'#T\d+', text) is not None
         
-        # ИГРА ЗАВЕРШЕНА если есть любой маркер завершения
         is_completed = has_r_tag or has_x_tag or has_check or has_t
         
-        # НАЙДЕМ ЛЕВУЮ ЧАСТЬ ДО РАЗДЕЛИТЕЛЯ
         left_part = UniversalGameParser._extract_left_part(text)
         logger.info(f"📝 Левая часть: {left_part[:100]}")
         
-        # 🔥 ПАРСИМ ВСЕ КАРТЫ ИЗ ЛЕВОЙ ЧАСТИ
         left_result, cards_text, left_suits = UniversalGameParser._parse_all_cards(left_part)
         
-        # Если не нашли в левой части, пробуем парсить весь текст
         if left_result is None:
             left_result, cards_text, left_suits = UniversalGameParser._parse_whole_text(text)
         
-        # Если нашли результат - это ЗАВЕРШЕННАЯ игра
         if left_result is not None and left_suits:
-            # Разделяем на изначальные карты (первые 2) и доборную (третью)
             initial_cards = left_suits[:2] if len(left_suits) >= 2 else left_suits
             drawn_card = left_suits[2] if len(left_suits) == 3 else None
             
             logger.info(f"✅ Игра #{game_num} ЗАВЕРШЕНА:")
-            logger.info(f"🎮 Фактический результат: {left_result}")
-            logger.info(f"🎮 Текст карт: {cards_text if cards_text else 'нет данных'}")
             logger.info(f"🎮 Всего карт слева: {len(left_suits)}")
             logger.info(f"🎮 Все масти: {left_suits}")
-            logger.info(f"🎮 Изначальные карты (первые 2): {initial_cards}")
-            logger.info(f"🎮 Доборная карта: {drawn_card if drawn_card else 'нет'}")
-            logger.info(f"🎮 T-маркер: {'✅' if has_t else '❌'}")
-            
-            for i, suit in enumerate(left_suits, 1):
-                logger.info(f"🎲 Карта #{i}: {suit}")
             
             game_data = {
                 'game_num': game_num,
@@ -121,7 +96,7 @@ class UniversalGameParser:
                 'has_x_tag': has_x_tag,
                 'has_check': has_check,
                 'has_t': has_t,
-                'is_deal': has_r_tag,  # #R означает сделку
+                'is_deal': has_r_tag,
                 'left_result': left_result,
                 'left_cards_count': len(left_suits),
                 'left_suits': left_suits,
@@ -134,13 +109,11 @@ class UniversalGameParser:
             
             return game_data
         
-        # Если не нашли результат - это НЕ завершенная игра
-        logger.info(f"🎮 Игра #{game_num}: НЕ завершена (нет числового результата или карт)")
+        logger.info(f"🎮 Игра #{game_num}: НЕ завершена")
         return None
     
     @staticmethod
     def _extract_left_part(text: str) -> str:
-        """Извлекает левую часть до любого разделителя"""
         separators = [
             ' 🔰 ', '🔰',
             ' - ', ' – ', ' — ',
@@ -160,7 +133,6 @@ class UniversalGameParser:
     
     @staticmethod
     def _parse_all_cards(left_text: str):
-        """Парсит ВСЕ карты из левой части"""
         left_result = None
         cards_text = ""
         suits = []
@@ -185,7 +157,6 @@ class UniversalGameParser:
     
     @staticmethod
     def _parse_whole_text(text: str):
-        """Парсит весь текст если не нашли в левой части"""
         left_result = None
         cards_text = ""
         suits = []
@@ -209,7 +180,6 @@ class UniversalGameParser:
     
     @staticmethod
     def _extract_all_suits(text: str):
-        """Извлекает ВСЕ масти из текста карт"""
         suits = []
         
         suit_patterns = {
@@ -225,24 +195,7 @@ class UniversalGameParser:
                 suits.append(suit_emoji)
         
         return suits
-    
-    @staticmethod
-    def normalize_suit(suit: str) -> str:
-        """Нормализует масть к стандартному виду"""
-        suit = suit.strip()
-        
-        if re.search(r'[♥❤♡\u2665]', suit):
-            return '♥️'
-        if re.search(r'[♠♤\u2660]', suit):
-            return '♠️'
-        if re.search(r'[♣♧\u2663]', suit):
-            return '♣️'
-        if re.search(r'[♦♢\u2666]', suit):
-            return '♦️'
-        
-        return suit
 
-# === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
 def get_next_game_number(current_game, increment=1):
     next_game = current_game + increment
     while next_game > MAX_GAME_NUMBER:
@@ -261,7 +214,6 @@ def get_loss_phrase():
     return random.choice(LOSS_PHRASES)
 
 def compare_suits(predicted_suit, found_suit):
-    """Сравнивает масти, нормализуя их"""
     suit_map = {
         '♥️': '♥', '♥': '♥', '❤': '♥', '♡': '♥',
         '♠️': '♠', '♠': '♠', '♤': '♠',
@@ -272,13 +224,11 @@ def compare_suits(predicted_suit, found_suit):
     predicted = suit_map.get(predicted_suit, predicted_suit)
     found = suit_map.get(found_suit, found_suit)
     
-    # Убираем невидимые символы
     predicted = predicted.replace('\ufe0f', '').replace('️', '').strip()
     found = found.replace('\ufe0f', '').replace('️', '').strip()
     
     return predicted == found
 
-# === АНАЛИЗАТОР МАСТЕЙ ===
 class SuitAnalyzer:
     def __init__(self):
         self.suit_history = []
@@ -319,7 +269,6 @@ class SuitAnalyzer:
         logger.info(f"🤖 AI выбрал: {suit} ({confidence*100:.1f}%)")
         return suit, confidence
 
-# === ХРАНИЛИЩЕ ===
 class Storage:
     def __init__(self):
         self.analyzer = SuitAnalyzer()
@@ -329,11 +278,9 @@ class Storage:
         self.strategy2_stats = {'total': 0, 'wins': 0, 'losses': 0}
         
     def add_to_history(self, game_data):
-        """Добавляет ТОЛЬКО завершенные игры в историю"""
         game_num = game_data['game_num']
         self.game_history[game_num] = game_data
         
-        # Добавляем ВСЕ масти для анализа
         if game_data['left_suits']:
             for suit in game_data['left_suits']:
                 self.analyzer.add_suit(suit)
@@ -362,10 +309,11 @@ class Storage:
                 return True
         return False
     
-    def create_strategy2_prediction(self, game_num):
+    def create_strategy2_prediction(self, game_num, third_card_value=None):
+        # ========== ИЗМЕНЕНИЕ: БЕЗ ЗАМЕНЫ ==========
+        # Просто берём масть как есть, без привязки к карте
         predicted_suit, confidence = self.analyzer.predict_next_suit()
         
-        # Сдвиг на +10 игр
         target_game = get_next_game_number(game_num, 10)
         
         if self.is_game_already_in_predictions(target_game):
@@ -416,17 +364,10 @@ class Storage:
 
 storage = Storage()
 
-# === ПРОВЕРКА ПРОГНОЗОВ НА КАЖДОМ ОБНОВЛЕНИИ ИГРЫ ===
 async def check_all_predictions(game_num, game_data, context):
-    """ПРОВЕРЯЕТ ВСЕ КАРТЫ В ЗАВЕРШЕННОЙ ИГРЕ (2 или 3 карты)"""
     logger.info(f"\n{'='*60}")
     logger.info(f"🔍 Проверяем ЗАВЕРШЕННУЮ игру #{game_num}")
-    logger.info(f"🎮 Фактический результат: {game_data['left_result']}")
-    logger.info(f"🎮 Всего карт: {game_data['left_cards_count']}")
     logger.info(f"🎮 Все масти: {game_data['left_suits']}")
-    
-    for i, suit in enumerate(game_data['left_suits'], 1):
-        logger.info(f"🎲 Карта #{i}: {suit}")
     
     strategy2_predictions = list(storage.strategy2_predictions.values())
     
@@ -445,10 +386,8 @@ async def check_all_predictions(game_num, game_data, context):
                 
                 logger.info(f"\n🎯 Проверка прогноза #{prediction['id']}")
                 logger.info(f"🎯 Ищем масть: {check_suit}")
-                logger.info(f"🎯 Попытка: {prediction['attempt'] + 1}")
                 logger.info(f"🎯 Все карты игрока слева: {game_data['left_suits']}")
                 
-                # ПРОВЕРЯЕМ КАЖДУЮ КАРТУ
                 suit_found = False
                 found_cards = []
                 
@@ -462,17 +401,14 @@ async def check_all_predictions(game_num, game_data, context):
                 
                 if suit_found:
                     logger.info(f"✅ ПРОГНОЗ #{prediction['id']} ВЫИГРАЛ!")
-                    logger.info(f"✅ Найден в картах: {found_cards}")
                     
                     prediction['found_in_cards'] = found_cards
                     prediction['win_announced'] = True
                     
-                    # ========== НОВОЕ: обновляем сообщение о заходе ==========
                     await update_prediction_message_win(prediction, game_num, context)
-                    
                     await handle_prediction_result(prediction, game_num, 'win', context)
                 else:
-                    logger.info(f"❌ Масть {check_suit} не найдена ни в одной карте")
+                    logger.info(f"❌ Масть не найдена")
                     
                     if prediction['attempt'] >= 2:
                         logger.info(f"💔 Все попытки исчерпаны")
@@ -483,14 +419,11 @@ async def check_all_predictions(game_num, game_data, context):
                         logger.info(f"🔄 Переход к догону {prediction['attempt']}")
                         await update_dogon_message(prediction, context)
 
-# ========== НОВАЯ ФУНКЦИЯ ДЛЯ ОБНОВЛЕНИЯ СООБЩЕНИЯ ПРИ ЗАХОДЕ ==========
 async def update_prediction_message_win(prediction, game_num, context):
-    """Обновляет сообщение в канале, когда прогноз зашёл"""
     try:
         if not prediction.get('channel_message_id'):
             return
             
-        # Определяем, на какой попытке зашло
         attempt_names = ["основной игре", "догоне 1", "догоне 2"]
         attempt_name = attempt_names[prediction['attempt']] if prediction['attempt'] < 3 else "догоне"
         
@@ -519,10 +452,10 @@ async def update_prediction_message_win(prediction, game_num, context):
             text=new_text,
             parse_mode='Markdown'
         )
-        logger.info(f"✅ Сообщение прогноза #{prediction['id']} обновлено (заход)")
+        logger.info(f"✅ Сообщение прогноза #{prediction['id']} обновлено")
         
     except Exception as e:
-        logger.error(f"❌ Ошибка обновления сообщения: {e}")
+        logger.error(f"❌ Ошибка: {e}")
 
 async def update_dogon_message(prediction, context):
     try:
@@ -560,24 +493,7 @@ async def update_dogon_message(prediction, context):
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
 
-async def handle_prediction_result(prediction, game_num, result, context):
-    prediction['status'] = result
-    prediction['result_game'] = game_num
-    
-    if result == 'win':
-        storage.strategy2_stats['wins'] += 1
-    else:
-        storage.strategy2_stats['losses'] += 1
-    
-    if result == 'loss':
-        await update_prediction_message_loss(prediction, context)
-    
-    if prediction['target_game'] in storage.strategy2_predictions:
-        del storage.strategy2_predictions[prediction['target_game']]
-
-# ========== НОВАЯ ФУНКЦИЯ ДЛЯ ОБНОВЛЕНИЯ СООБЩЕНИЯ ПРИ ПРОИГРЫШЕ ==========
 async def update_prediction_message_loss(prediction, context):
-    """Обновляет сообщение в канале, когда прогноз не зашёл"""
     try:
         if not prediction.get('channel_message_id'):
             return
@@ -604,7 +520,22 @@ async def update_prediction_message_loss(prediction, context):
         logger.info(f"✅ Сообщение прогноза #{prediction['id']} обновлено (проигрыш)")
         
     except Exception as e:
-        logger.error(f"❌ Ошибка обновления сообщения: {e}")
+        logger.error(f"❌ Ошибка: {e}")
+
+async def handle_prediction_result(prediction, game_num, result, context):
+    prediction['status'] = result
+    prediction['result_game'] = game_num
+    
+    if result == 'win':
+        storage.strategy2_stats['wins'] += 1
+    else:
+        storage.strategy2_stats['losses'] += 1
+    
+    if result == 'loss':
+        await update_prediction_message_loss(prediction, context)
+    
+    if prediction['target_game'] in storage.strategy2_predictions:
+        del storage.strategy2_predictions[prediction['target_game']]
 
 async def send_prediction_to_channel(prediction, context):
     try:
@@ -613,7 +544,7 @@ async def send_prediction_to_channel(prediction, context):
         text = (
             f"🎰 *AI АНАЛИЗ МАСТЕЙ* 🎰\n\n"
             f"{get_funny_phrase()}\n\n"
-            f"🎯 *AI ПРОГНОЗ #{prediction['id']}:*\n"
+            f"🎯 *ПРОГНОЗ #{prediction['id']}:*\n"
             f"┣ 🎯 Целевая игра: #{prediction['target_game']}\n"
             f"┗ 🤖 Уверенность AI: {confidence*100:.1f}%\n\n"
             f"🔄 *ПЛАН ПРОВЕРКИ:*\n"
@@ -621,8 +552,7 @@ async def send_prediction_to_channel(prediction, context):
             f"┣ 🔄 Попытка 2: Игра #{prediction['check_games'][1]}\n"
             f"┗ 🔄 Попытка 3: Игра #{prediction['check_games'][2]}\n\n"
             f"🎲 *ОЖИДАНИЕ:*\n"
-            f"Масть {prediction['original_suit']} у игрока слева\n"
-            f"*Проверяем ВСЕ карты в левой руке*\n\n"
+            f"Масть {prediction['original_suit']} у игрока слева\n\n"
             f"⏳ *СТАТУС:* ОЖИДАНИЕ..."
         )
         
@@ -634,7 +564,6 @@ async def send_prediction_to_channel(prediction, context):
         
         prediction['channel_message_id'] = message.message_id
         
-        # ========== НОВОЕ: сохраняем ID сообщения для будущих обновлений ==========
         global prediction_messages
         for check_game in prediction['check_games']:
             if check_game not in prediction_messages:
@@ -659,31 +588,23 @@ async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         text = message.text
         logger.info(f"\n{'='*60}")
-        logger.info(f"📥 Получено сообщение:")
-        logger.info(f"{text[:150]}...")
+        logger.info(f"📥 Получено сообщение: {text[:150]}...")
         
-        # Используем УНИВЕРСАЛЬНЫЙ парсер
         game_data = UniversalGameParser.extract_game_data(text)
         
-        # ТОЛЬКО если игра завершена
         if not game_data or not game_data.get('is_completed'):
-            game_num = re.search(r'#N(\d+)', text)
-            if game_num:
-                logger.info(f"⏳ Игра #{game_num.group(1)} еще не завершена - пропускаем")
-            else:
-                logger.info(f"⏳ Не удалось определить игру")
             return
         
         storage.add_to_history(game_data)
         await check_all_predictions(game_data['game_num'], game_data, context)
         
-        # Не создаем прогноз если это игра-сделка (#R)
         if not game_data.get('is_deal', False):
+            # Для бота без замены не передаём third_card_value
             prediction = storage.create_strategy2_prediction(game_data['game_num'])
             if prediction:
                 await send_prediction_to_channel(prediction, context)
         else:
-            logger.info(f"🚫 Игра #{game_data['game_num']} является СДЕЛКОЙ (#R) - прогноз не создан")
+            logger.info(f"🚫 Игра #{game_data['game_num']} - #R, прогноз не создан")
         
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
@@ -697,18 +618,12 @@ def main():
     ))
     
     print("\n" + "="*60)
-    print("🤖 БОТ ЗАПУЩЕН:")
+    print("🤖 БОТ №1 (БЕЗ ЗАМЕНЫ) ЗАПУЩЕН")
     print("="*60)
-    print("✅ ПРОВЕРЯЕТ ВСЕ КАРТЫ ИГРОКА СЛЕВА (2 или 3 карты)")
-    print("✅ ОДНА МАСТЬ НА ВСЕ 3 ПОПЫТКИ")
-    print("✅ ОБРАБАТЫВАЕТ ЛЮБОЙ РАЗДЕЛИТЕЛЬ")
-    print("✅ ИЩЕТ МАСТИ ВО ВСЕХ КАРТАХ")
-    print("✅ РАСПОЗНАЕТ #T С ЛЮБОЙ ЦИФРОЙ (#T0, #T1, #T2, #T3, #T4, #T5, #T6, #T7, #T8, #T9)")
-    print("✅ НЕ СОЗДАЕТ ПРОГНОЗЫ ПОСЛЕ #R (СДЕЛКИ)")
-    print("✅ ОБНОВЛЯЕТ СООБЩЕНИЯ ПРИ ЗАХОДЕ ИЛИ ПРОИГРЫШЕ")
+    print("✅ Просто масть как есть, без замен")
+    print("✅ Никаких 6→J, 7→Q, 8→K")
     print("="*60)
     
-    logger.info("🤖 Бот запущен...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
