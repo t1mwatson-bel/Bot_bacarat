@@ -38,7 +38,7 @@ def init_db():
 
 # ==================== ПАРСИНГ (ВЗЯТ ИЗ РАБОЧЕГО КОДА) ====================
 def extract_game_data(text: str):
-    """Извлекает данные из игры"""
+    """Извлекает данные только если у победителя 3 карты"""
     
     if not text:
         return None
@@ -49,55 +49,49 @@ def extract_game_data(text: str):
     
     game_num = int(match.group(1))
     
-    # 🔥 ПРИЗНАКИ ЗАВЕРШЕННОЙ ИГРЫ:
+    # Признаки завершённой игры
     has_check = '✅' in text
     has_t = re.search(r'#T\d+', text) is not None
-    has_r = '#R' in text
-    has_x = '#X' in text
     
-    is_completed = has_check or has_t or has_r or has_x
-    
-    if not is_completed:
-        logger.info(f"⏳ Игра #{game_num} не завершена")
+    if not (has_check or has_t):
         return None
     
-    # Находим левую часть (игрок)
-    left_part = text
-    if '-' in text:
-        left_part = text.split('-')[0]
+    # Определяем победителя
+    if '✅' in text.split('-')[0]:
+        winner_part = text.split('-')[0]  # игрок
+    else:
+        winner_part = text.split('-')[1]  # банкир
     
-    # Ищем карты в скобках
-    cards_match = re.search(r'\(([^)]+)\)', left_part)
+    # Ищем карты в скобках у победителя
+    cards_match = re.search(r'\(([^)]+)\)', winner_part)
     if not cards_match:
-        logger.info(f"❌ Не найдены карты в скобках")
         return None
     
     cards_text = cards_match.group(1)
-    
-    # Извлекаем ВСЕ масти из текста карт (не только уникальные)
-    suits = []
-    
-    # Проходим по каждой карте (они разделены пробелами)
     cards_list = cards_text.split()
     
+    # ✅ ВАЖНО: Если у победителя НЕ 3 карты — пропускаем
+    if len(cards_list) != 3:
+        print(f"⏳ Игра #{game_num}: у победителя {len(cards_list)} карты, ждём добора")
+        return None
+    
+    # Извлекаем масти
+    suits = []
     for card in cards_list:
-        # Ищем масть в конце карты
-        if '♥' in card or '❤' in card or '♡' in card:
+        if '♥' in card:
             suits.append('♥️')
-        elif '♠' in card or '♤' in card:
+        elif '♠' in card:
             suits.append('♠️')
-        elif '♣' in card or '♧' in card:
+        elif '♣' in card:
             suits.append('♣️')
-        elif '♦' in card or '♢' in card:
+        elif '♦' in card:
             suits.append('♦️')
     
-    logger.info(f"✅ Игра #{game_num} завершена, масти: {suits}")
-    
-    if len(suits) >= 3:
-        third_card_suit = suits[2]
+    if len(suits) == 3:
+        print(f"✅ Игра #{game_num} ПОЛНАЯ, масти: {suits}")
         return {
             "num": game_num,
-            "suit": third_card_suit,
+            "suit": suits[2],
             "all_suits": suits,
             "has_3_cards": True
         }
