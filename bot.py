@@ -32,42 +32,70 @@ def init_db():
 def get_winner_suit(text: str) -> dict:
     """Возвращает {'num': int, 'suit': str} или None"""
     
-    if not text or "✅" not in text:
+    print(f"🔍 Анализирую: {text[:100]}...")
+    
+    if not text:
+        print("❌ Текст пустой")
+        return None
+        
+    if "✅" not in text:
+        print("❌ Нет символа ✅")
         return None
         
     if "#R" in text or "🔰" in text:
+        print("❌ Есть #R или 🔰")
         return None
 
     game_match = re.search(r"#N(\d+)", text)
     if not game_match:
+        print("❌ Не найден номер игры")
         return None
     game_num = int(game_match.group(1))
+    print(f"✅ Номер игры: {game_num}")
 
     # Определяем победителя
-    if "✅" in text.split("-")[0]:
-        winner_part = text.split("-")[0]
+    parts = text.split("-")
+    if len(parts) != 2:
+        print("❌ Не могу разделить на игрока и банкира")
+        return None
+        
+    if "✅" in parts[0]:
+        winner_part = parts[0]
+        print(f"✅ Победитель: игрок")
     else:
-        winner_part = text.split("-")[1]
+        winner_part = parts[1]
+        print(f"✅ Победитель: банкир")
 
     cards_match = re.search(r"\(([^)]+)\)", winner_part)
     if not cards_match:
+        print("❌ Не найдены карты в скобках")
         return None
-
+        
     cards_text = cards_match.group(1)
+    print(f"✅ Карты победителя: {cards_text}")
+
     cards = re.findall(r'(\d{1,2}|[AKQJ])', cards_text)
+    print(f"✅ Найденные номиналы: {cards}")
     
     if len(cards) != 3:
+        print(f"❌ У победителя не 3 карты, а {len(cards)}")
         return None
 
     # Ищем масть третьей карты
     third_card = cards[2]
+    print(f"🔍 Ищем масть для карты {third_card}")
+    
     suit_match = re.search(rf"{third_card}([♥♠♣♦])", cards_text)
     if not suit_match:
+        print(f"❌ Не найдена масть для карты {third_card}")
         return None
+        
+    suit = suit_match.group(1)
+    print(f"✅ Масть третьей карты: {suit}")
 
     return {
         "num": game_num,
-        "suit": suit_match.group(1)
+        "suit": suit
     }
 
 # ==================== ОСНОВНАЯ ЛОГИКА ====================
