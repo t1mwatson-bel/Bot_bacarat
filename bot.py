@@ -36,45 +36,75 @@ def init_db():
 def get_winner_suit(text: str) -> dict:
     """Возвращает {'num': int, 'suit': str} или None"""
     
-    if not text or "✅" not in text:
+    print(f"🔍 Анализирую: {text}")
+    
+    if not text:
+        print("❌ Текст пустой")
+        return None
+        
+    if "✅" not in text:
+        print("❌ Нет символа ✅")
         return None
         
     if "#R" in text or "🔰" in text:
+        print("❌ Есть #R или 🔰")
         return None
 
     game_match = re.search(r"#N(\d+)", text)
     if not game_match:
+        print("❌ Не найден номер игры")
         return None
     game_num = int(game_match.group(1))
+    print(f"✅ Номер игры: {game_num}")
 
     # Определяем победителя
     parts = text.split("-")
     if len(parts) != 2:
+        print("❌ Не могу разделить на игрока и банкира")
         return None
         
+    print(f"🔹 Левая часть: {parts[0].strip()}")
+    print(f"🔹 Правая часть: {parts[1].strip()}")
+    
     if "✅" in parts[0]:
         winner_part = parts[0]
+        print("✅ Победитель: игрок")
     else:
         winner_part = parts[1]
+        print("✅ Победитель: банкир")
+
+    print(f"🔹 Часть победителя: {winner_part}")
 
     cards_match = re.search(r"\(([^)]+)\)", winner_part)
     if not cards_match:
+        print("❌ Не найдены карты в скобках")
         return None
-
+        
     cards_text = cards_match.group(1)
-    cards = re.findall(r'(\d{1,2}|[AKQJ])', cards_text)
+    print(f"✅ Карты победителя: {cards_text}")
+
+    # Разделяем карты (по пробелу)
+    card_items = cards_text.split()
+    print(f"✅ Карты по отдельности: {card_items}")
     
-    if len(cards) != 3:
+    if len(card_items) != 3:
+        print(f"❌ У победителя не 3 карты, а {len(card_items)}")
         return None
 
-    third_card = cards[2]
-    suit_match = re.search(rf"{third_card}([♥♠♣♦])", cards_text)
-    if not suit_match:
+    third_card = card_items[2]
+    print(f"🔍 Третья карта: {third_card}")
+    
+    # Ищем масть (последний символ)
+    if len(third_card) < 2:
+        print("❌ Карта слишком короткая")
         return None
+        
+    suit = third_card[-1]
+    print(f"✅ Масть: {suit}")
 
     return {
         "num": game_num,
-        "suit": suit_match.group(1)
+        "suit": suit
     }
 
 # ==================== ПРОВЕРКА РЕЗУЛЬТАТА ====================
