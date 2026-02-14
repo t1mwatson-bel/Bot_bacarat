@@ -111,7 +111,7 @@ def handle_input(update: Update, context: CallbackContext):
         if not text:
             return
 
-        # Каждый раз проверяем заново, не запоминаем игры
+        # Ничего не запоминаем — просто проверяем текущее сообщение
         game = get_winner_suit(text)
         if not game:
             return
