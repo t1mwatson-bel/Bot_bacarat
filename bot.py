@@ -15,7 +15,112 @@ from telegram.ext import (
 )
 
 # === НАСТРОЙКИ ===
-TOKEN = "1163348874:AAHtWt2ahW2CS92LbFlIQ2x6pT-YYrIe0mI"
+TOKEN = "🤖 БОТ ЗАПУЩЕН:
+============================================================
+✅ ОДНА МАСТЬ НА ВСЕ 3 ПОПЫТКИ
+✅ ОБРАБАТЫВАЕТ ЛЮБОЙ РАЗДЕЛИТЕЛЬ
+✅ ИЩЕТ МАСТИ ВО ВСЕХ КАРТАХ
+✅ РАСПОЗНАЕТ #T С ЛЮБОЙ ЦИФРОЙ (#T0, #T1, #T2, #T3, #T4, #T5, #T6, #T7, #T8, #T9)
+✅ НЕ СОЗДАЕТ ПРОГНОЗЫ ПОСЛЕ #R (СДЕЛКИ)
+============================================================
+2026-02-14 11:32:33,861 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot1163348874:AAHtWt2ahW2CS92LbFlIQ2x6pT-YYrIe0mI/getMe "HTTP/1.1 401 Unauthorized"
+Traceback (most recent call last):
+  File "/app/.venv/lib/python3.10/site-packages/telegram/_bot.py", line 735, in initialize
+    await self.get_me()
+  File "/app/.venv/lib/python3.10/site-packages/telegram/ext/_extbot.py", line 1697, in get_me
+    return await super().get_me(
+  File "/app/.venv/lib/python3.10/site-packages/telegram/_bot.py", line 525, in decorator
+    result = await func(self, *args, **kwargs)  # skipcq: PYL-E1102
+  File "/app/.venv/lib/python3.10/site-packages/telegram/_bot.py", line 775, in get_me
+    result = await self._post(
+  File "/app/.venv/lib/python3.10/site-packages/telegram/_bot.py", line 613, in _post
+    return await self._do_post(
+  File "/app/.venv/lib/python3.10/site-packages/telegram/ext/_extbot.py", line 340, in _do_post
+    return await super()._do_post(
+  File "/app/.venv/lib/python3.10/site-packages/telegram/_bot.py", line 641, in _do_post
+    return await request.post(
+  File "/app/.venv/lib/python3.10/site-packages/telegram/request/_baserequest.py", line 200, in post
+    result = await self._request_wrapper(
+  File "/app/.venv/lib/python3.10/site-packages/telegram/request/_baserequest.py", line 377, in _request_wrapper
+    raise InvalidToken(message)
+telegram.error.InvalidToken: Unauthorized
+  File "/app/.venv/lib/python3.10/site-packages/telegram/ext/_application.py", line 477, in initialize
+    await self.bot.initialize()
+  File "/app/.venv/lib/python3.10/site-packages/telegram/ext/_extbot.py", line 286, in initialize
+    await super().initialize()
+  File "/app/.venv/lib/python3.10/site-packages/telegram/_bot.py", line 737, in initialize
+The above exception was the direct cause of the following exception:
+Traceback (most recent call last):
+  File "/app/bot.py", line 678, in <module>
+    main()
+  File "/app/bot.py", line 675, in main
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
+  File "/app/.venv/lib/python3.10/site-packages/telegram/ext/_application.py", line 818, in run_polling
+    return self.__run(
+  File "/app/.venv/lib/python3.10/site-packages/telegram/ext/_application.py", line 1006, in __run
+    raise exc
+  File "/app/.venv/lib/python3.10/site-packages/telegram/ext/_application.py", line 995, in __run
+    loop.run_until_complete(self.initialize())
+  File "/mise/installs/python/3.10.16/lib/python3.10/asyncio/base_events.py", line 649, in run_until_complete
+    return future.result()
+    raise InvalidToken(f"The token `{self._token}` was rejected by the server.") from exc
+telegram.error.InvalidToken: The token `1163348874:AAHtWt2ahW2CS92LbFlIQ2x6pT-YYrIe0mI` was rejected by the server.
+✅ РАСПОЗНАЕТ #T С ЛЮБОЙ ЦИФРОЙ (#T0, #T1, #T2, #T3, #T4, #T5, #T6, #T7, #T8, #T9)
+✅ НЕ СОЗДАЕТ ПРОГНОЗЫ ПОСЛЕ #R (СДЕЛКИ)
+============================================================
+2026-02-14 11:32:35,646 - __main__ - INFO - 🤖 Бот запущен...
+============================================================
+🤖 БОТ ЗАПУЩЕН:
+============================================================
+✅ ПРОВЕРЯЕТ ВСЕ КАРТЫ ИГРОКА СЛЕВА (2 или 3 карты)
+✅ ОДНА МАСТЬ НА ВСЕ 3 ПОПЫТКИ
+✅ ОБРАБАТЫВАЕТ ЛЮБОЙ РАЗДЕЛИТЕЛЬ
+✅ ИЩЕТ МАСТИ ВО ВСЕХ КАРТАХ
+  File "/app/.venv/lib/python3.10/site-packages/telegram/_bot.py", line 735, in initialize
+    await self.get_me()
+  File "/app/.venv/lib/python3.10/site-packages/telegram/ext/_extbot.py", line 1697, in get_me
+    return await super().get_me(
+  File "/app/.venv/lib/python3.10/site-packages/telegram/_bot.py", line 525, in decorator
+    result = await func(self, *args, **kwargs)  # skipcq: PYL-E1102
+  File "/app/.venv/lib/python3.10/site-packages/telegram/_bot.py", line 775, in get_me
+    result = await self._post(
+  File "/app/.venv/lib/python3.10/site-packages/telegram/_bot.py", line 613, in _post
+    return await self._do_post(
+  File "/app/.venv/lib/python3.10/site-packages/telegram/ext/_extbot.py", line 340, in _do_post
+    return await super()._do_post(
+  File "/app/.venv/lib/python3.10/site-packages/telegram/_bot.py", line 641, in _do_post
+    return await request.post(
+  File "/app/.venv/lib/python3.10/site-packages/telegram/request/_baserequest.py", line 200, in post
+    result = await self._request_wrapper(
+  File "/app/.venv/lib/python3.10/site-packages/telegram/request/_baserequest.py", line 377, in _request_wrapper
+2026-02-14 11:32:36,118 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot1163348874:AAHtWt2ahW2CS92LbFlIQ2x6pT-YYrIe0mI/getMe "HTTP/1.1 401 Unauthorized"
+Traceback (most recent call last):
+    raise InvalidToken(message)
+  File "/app/.venv/lib/python3.10/site-packages/telegram/ext/_application.py", line 818, in run_polling
+telegram.error.InvalidToken: Unauthorized
+    return self.__run(
+  File "/app/.venv/lib/python3.10/site-packages/telegram/ext/_application.py", line 1006, in __run
+    raise exc
+The above exception was the direct cause of the following exception:
+  File "/app/.venv/lib/python3.10/site-packages/telegram/ext/_application.py", line 995, in __run
+    loop.run_until_complete(self.initialize())
+Traceback (most recent call last):
+  File "/mise/installs/python/3.10.16/lib/python3.10/asyncio/base_events.py", line 649, in run_until_complete
+    return future.result()
+  File "/app/bot.py", line 678, in <module>
+  File "/app/.venv/lib/python3.10/site-packages/telegram/ext/_application.py", line 477, in initialize
+    await self.bot.initialize()
+    main()
+  File "/app/.venv/lib/python3.10/site-packages/telegram/ext/_extbot.py", line 286, in initialize
+  File "/app/bot.py", line 675, in main
+    await super().initialize()
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
+  File "/app/.venv/lib/python3.10/site-packages/telegram/_bot.py", line 737, in initialize
+    raise InvalidToken(f"The token `{self._token}` was rejected by the server.") from exc
+telegram.error.InvalidToken: The token `1163348874:AAHtWt2ahW2CS92LbFlIQ2x6pT-YYrIe0mI` was rejected by the server.
+============================================================
+🤖 БОТ ЗАПУЩЕН:
+"
 INPUT_CHANNEL_ID = -1003469691743
 OUTPUT_CHANNEL_ID = -1003855079501
 ADMIN_ID = 683219603
