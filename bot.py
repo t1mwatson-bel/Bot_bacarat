@@ -38,7 +38,7 @@ def init_db():
 
 # ==================== ПАРСИНГ (ВЗЯТ ИЗ РАБОЧЕГО КОДА) ====================
 def extract_game_data(text: str):
-    """Извлекает данные из игры (адаптировано из рабочего кода)"""
+    """Извлекает данные из игры"""
     
     if not text:
         return None
@@ -65,14 +65,6 @@ def extract_game_data(text: str):
     left_part = text
     if '-' in text:
         left_part = text.split('-')[0]
-    elif '👉👈' in text:
-        left_part = text.split('👉👈')[0]
-    elif '👈👉' in text:
-        left_part = text.split('👈👉')[0]
-    elif '👉' in text:
-        left_part = text.split('👉')[0]
-    elif '👈' in text:
-        left_part = text.split('👈')[0]
     
     # Ищем карты в скобках
     cards_match = re.search(r'\(([^)]+)\)', left_part)
@@ -82,18 +74,22 @@ def extract_game_data(text: str):
     
     cards_text = cards_match.group(1)
     
-    # Извлекаем все масти из текста карт
+    # Извлекаем ВСЕ масти из текста карт (не только уникальные)
     suits = []
-    suit_patterns = {
-        '♥️': r'[♥❤♡]',
-        '♠️': r'[♠♤]',
-        '♣️': r'[♣♧]',
-        '♦️': r'[♦♢]'
-    }
     
-    for suit_emoji, pattern in suit_patterns.items():
-        if re.search(pattern, cards_text):
-            suits.append(suit_emoji)
+    # Проходим по каждой карте (они разделены пробелами)
+    cards_list = cards_text.split()
+    
+    for card in cards_list:
+        # Ищем масть в конце карты
+        if '♥' in card or '❤' in card or '♡' in card:
+            suits.append('♥️')
+        elif '♠' in card or '♤' in card:
+            suits.append('♠️')
+        elif '♣' in card or '♧' in card:
+            suits.append('♣️')
+        elif '♦' in card or '♢' in card:
+            suits.append('♦️')
     
     logger.info(f"✅ Игра #{game_num} завершена, масти: {suits}")
     
