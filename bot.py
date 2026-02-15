@@ -7,7 +7,7 @@ import os
 import requests
 
 # ==================== НАСТРОЙКИ ====================
-TOKEN = os.getenv("TOKEN", "5482422004:AAHKwdpP9ARXWDhhuqqO_9rDKRjjH7rePZs")
+TOKEN = os.getenv("TOKEN", "1163348874:AAFgZEXveILvD4MbhQ8jiLTwIxs4puYhmq0")
 INPUT_CHANNEL_ID = int(os.getenv("INPUT_CHANNEL_ID", "-1003469691743"))
 OUTPUT_CHANNEL_ID = int(os.getenv("OUTPUT_CHANNEL_ID", "-1003842401391"))
 ADMIN_ID = int(os.getenv("ADMIN_ID", "683219603"))
@@ -36,22 +36,26 @@ def normalize_game_num(num):
 
 def get_rule_for_game(game_num):
     """
-    Возвращает правило для игры в зависимости от её номера.
-    Правила:
-    - 'red_black'  : красная ↔ чёрная  (♥️↔♣️, ♦️↔♠️)
-    - 'same_color' : красная ↔ красная (♥️↔♦️), чёрная ↔ чёрная (♠️↔♣️)
+    Определяет правило смены масти по номеру игры.
+    Чередование каждые 10 игр:
+    - 1-9, 20-29, 40-49... -> 'red_black'
+    - 10-19, 30-39, 50-59... -> 'same_color'
     """
-    # Определяем диапазон (десятки)
-    decade = (game_num // 10) * 10
+    # Приводим к диапазону 1–1440
+    while game_num > MAX_GAME_NUMBER:
+        game_num -= MAX_GAME_NUMBER
+    while game_num < 1:
+        game_num += MAX_GAME_NUMBER
     
-    # Для последнего десятка (1430–1440) обрабатываем отдельно
-    if game_num > 1430:
-        # 1430–1439 — по аналогии с 30–39 (same_color)
-        # 1440 — как 40 (red_black)
-        if 1430 <= game_num <= 1439:
-            return 'same_color'
-        elif game_num == 1440:
-            return 'red_black'
+    # Начало диапазона (десятки)
+    decade_start = (game_num // 10) * 10
+    
+    # Если начало диапазона 0, 20, 40, 60... — red_black
+    # Если 10, 30, 50, 70... — same_color
+    if decade_start % 20 == 0:
+        return 'red_black'
+    else:
+        return 'same_color''
     
     # Таблица соответствия диапазонов и правил
     rule_map = {
@@ -198,7 +202,6 @@ def get_rule_for_game(game_num):
         1400: 'red_black', # 1400-1409
         1410: 'same_color', # 1410-1419
         1420: 'red_black', # 1420-1429
-        1430: 'same_color', # 1430-1439
     }
     
     return rule_map.get(decade, None)
