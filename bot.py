@@ -4,17 +4,22 @@ import re
 import asyncio
 import time
 import sys
-import signal
+import os
+import fcntl
 from datetime import datetime
 from collections import defaultdict
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 from telegram.error import Conflict
+import requests
 
 # === НАСТРОЙКИ ===
 TOKEN = "1163348874:AAFgZEXveILvD4MbhQ8jiLTwIxs4puYhmq0"
 INPUT_CHANNEL_ID = -1003469691743
 OUTPUT_CHANNEL_ID = -1003855079501
+
+# Уникальный lock-файл для этого бота
+LOCK_FILE = f'/tmp/bot_{TOKEN[-10:]}.lock'
 
 # Диапазоны игр, которые нас интересуют
 VALID_RANGES = [
@@ -62,7 +67,48 @@ class GameStorage:
         self.prediction_counter = 0
 
 storage = GameStorage()
-application = None  # Глобальная ссылка на приложение
+application = None
+lock_fd = None
+
+def acquire_lock():
+    """Блокировка для предотвращения множественных запусков"""
+    global lock_fd
+    try:
+        lock_fd = open(LOCK_FILE, 'w')
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        logger.info(f"🔒 Блокировка получена: {LOCK_FILE}")
+        return True
+    except (IOError, OSError):
+        logger.error(f"❌ Бот уже запущен (lock файл: {LOCK_FILE})")
+        return False
+
+def release_lock():
+    """Освобождение блокировки"""
+    global lock_fd
+    if lock_fd:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            lock_fd.close()
+            os.unlink(LOCK_FILE)
+            logger.info("🔓 Блокировка освобождена")
+        except:
+            pass
+
+def check_bot_token():
+    """Проверка токена бота"""
+    try:
+        url = f"https://api.telegram.org/bot{TOKEN}/getMe"
+        response = requests.get(url, timeout=5)
+        if response.status_code == 200:
+            bot_info = response.json()['result']
+            logger.info(f"✅ Бот @{bot_info['username']} авторизован")
+            return True
+        else:
+            logger.error(f"❌ Ошибка авторизации: {response.text}")
+            return False
+    except Exception as e:
+        logger.error(f"❌ Ошибка при проверке токена: {e}")
+        return False
 
 def is_valid_game(game_num):
     """Проверяет, входит ли игра в нужные диапазоны и нечетная ли она"""
@@ -274,10 +320,9 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if isinstance(context.error, Conflict):
             logger.warning("⚠️ Обнаружен конфликт с другим экземпляром бота")
-            # Останавливаем приложение
-            if application:
-                await application.stop()
-            sys.exit(1)
+            # Пробуем перезапуститься
+            await asyncio.sleep(5)
+            os._exit(1)  # Принудительный выход
         else:
             logger.error(f"❌ Ошибка: {context.error}")
     except Exception as e:
@@ -286,6 +331,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def shutdown():
     """Graceful shutdown"""
     logger.info("🛑 Завершение работы...")
+    release_lock()
     if application:
         await application.stop()
     sys.exit(0)
@@ -301,6 +347,7 @@ def main():
     print("🤖 БОТ ДЛЯ АНАЛИЗА ПАТТЕРНОВ ЗАПУЩЕН")
     print("="*60)
     print(f"✅ Версия Python: 3.13+")
+    print(f"✅ Токен бота: ...{TOKEN[-10:]}")
     print(f"✅ Отслеживаем только нечетные игры в {len(VALID_RANGES)} диапазонах")
     print("✅ Правила смены мастей:")
     print("   - Черва (♥️) -> Трефа (♣️)")
@@ -308,6 +355,17 @@ def main():
     print("   - Бубна (♦️) -> Пики (♠️)")
     print("   - Пики (♠️) -> Бубна (♦️)")
     print("="*60)
+    
+    # Проверяем блокировку
+    if not acquire_lock():
+        logger.error("❌ Не удалось получить блокировку. Возможно бот уже запущен.")
+        sys.exit(1)
+    
+    # Проверяем токен
+    if not check_bot_token():
+        logger.error("❌ Ошибка авторизации бота")
+        release_lock()
+        sys.exit(1)
     
     # Создаем новый event loop
     loop = asyncio.new_event_loop()
@@ -333,13 +391,17 @@ def main():
             # Запускаем бота
             logger.info("🚀 Запуск бота...")
             
-            # Запускаем polling в текущем event loop
+            # Запускаем polling
             loop.run_until_complete(application.initialize())
             loop.run_until_complete(application.start())
             loop.run_until_complete(application.updater.start_polling(
                 drop_pending_updates=True,
-                allowed_updates=['message', 'channel_post']
+                allowed_updates=['channel_post'],  # Только посты каналов
+                poll_interval=1.0,
+                timeout=10
             ))
+            
+            logger.info("✅ Бот успешно запущен и слушает канал")
             
             # Держим бота запущенным
             loop.run_forever()
@@ -352,12 +414,14 @@ def main():
                 time.sleep(5)
             else:
                 logger.error("❌ Не удалось запустить бота после нескольких попыток")
+                release_lock()
                 sys.exit(1)
         except KeyboardInterrupt:
             logger.info("🛑 Получен сигнал остановки")
             break
         except Exception as e:
             logger.error(f"❌ Критическая ошибка: {e}")
+            release_lock()
             sys.exit(1)
         finally:
             # Останавливаем приложение
@@ -366,6 +430,7 @@ def main():
                     loop.run_until_complete(application.stop())
                 except:
                     pass
+            release_lock()
             loop.close()
 
 if __name__ == "__main__":
