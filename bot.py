@@ -7,7 +7,7 @@ import os
 import requests  # для сброса вебхука
 
 # ==================== НАСТРОЙКИ ====================
-TOKEN = os.getenv("TOKEN", "1163348874:AAFgZEXveILvD4MbhQ8jiLTwIxs4puYhmq0")
+TOKEN = os.getenv("TOKEN", "5482422004:AAHXLYyZ-qoCsycse1k9Qt6YRi9jmB24B-k")
 INPUT_CHANNEL_ID = int(os.getenv("INPUT_CHANNEL_ID", "-1003469691743"))
 OUTPUT_CHANNEL_ID = int(os.getenv("OUTPUT_CHANNEL_ID", "-1003842401391"))
 ADMIN_ID = int(os.getenv("ADMIN_ID", "683219603"))
