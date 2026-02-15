@@ -9,7 +9,7 @@ import requests
 # ==================== НАСТРОЙКИ ====================
 TOKEN = os.getenv("TOKEN", "5482422004:AAHXLYyZ-qoCsycse1k9Qt6YRi9jmB24B-k")
 INPUT_CHANNEL_ID = int(os.getenv("INPUT_CHANNEL_ID", "-1003469691743"))
-OUTPUT_CHANNEL_ID = int(os.getenv("OUTPUT_CHANNEL_ID", "-1003842401391"))
+OUTPUT_CHANNEL_ID = int(os.getenv("OUTPUT_CHANNEL_ID", "-1003855079501"))
 ADMIN_ID = int(os.getenv("ADMIN_ID", "683219603"))
 MAX_GAME_NUMBER = 1440
 
@@ -21,7 +21,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ==================== ХРАНИЛИЩЕ ИГР ====================
-last_donor = None  # {'num': int, 'first_suit': str, 'rule': str}
+# Больше ничего не запоминаем! Только текущего донора.
+last_donor = None
 
 
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
@@ -86,7 +87,7 @@ def parse_game(text):
     - первую карту игрока (левую руку)
     - первые две карты игрока (для контроля)
     """
-    if not text or '✅' not in text:
+    if not text:
         return None
 
     match = re.search(r'#N(\d+)', text)
@@ -130,11 +131,15 @@ def parse_game(text):
     if len(suits) == 0:
         return None
 
+    # Проверяем, есть ли в игре победитель (✅)
+    has_winner = '✅' in text
+
     return {
         'num': game_num,
         'first_suit': suits[0],
         'first_two_suits': suits[:2] if len(suits) >= 2 else suits,
         'all_suits': suits,
+        'has_winner': has_winner,
         'text': text
     }
 
@@ -144,30 +149,34 @@ def handle_new_game(update: Update, context: CallbackContext):
     global last_donor
 
     try:
-        logger.info(f"🔥🔥🔥 ВООБЩЕ ЛЮБОЙ update: {update}")
-        # 🔥 ТЕСТОВЫЙ ЛОГ — сразу видно, доходит ли сообщение
-        logger.info(f"🔥🔥🔥 Получен update: {update}")
+        # Логируем всё, что приходит
+        logger.info(f"🔥🔥🔥 Получен update. Тип: {type(update)}")
         if update.channel_post:
-            logger.info(f"🔥 Есть channel_post! Текст: {update.channel_post.text}")
+            logger.info(f"📨 Сообщение из канала: {update.channel_post.text[:200]}")
         else:
-            logger.info(f"🔥 Нет channel_post, это другое: {update}")
+            logger.info(f"⚠️ Не channel_post: {update}")
+            return
 
-        if not update.channel_post or update.channel_post.chat_id != INPUT_CHANNEL_ID:
-            logger.info(f"⏭️ Не тот канал или нет channel_post")
+        if update.channel_post.chat_id != INPUT_CHANNEL_ID:
+            logger.info(f"⏭️ Чат {update.channel_post.chat_id} не совпадает с INPUT_CHANNEL_ID")
             return
 
         text = update.channel_post.text
-        logger.info(f"📥 Получено из канала: {text[:100]}...")
-
         game = parse_game(text)
+
         if not game:
             logger.info("❌ Не удалось распарсить игру")
             return
 
         game_num = game['num']
-        logger.info(f"✅ Распарсена игра #{game_num}, первая масть: {game['first_suit']}, первые две: {game['first_two_suits']}")
+        logger.info(f"✅ Распарсена игра #{game_num}, есть победитель: {game['has_winner']}, первая масть: {game['first_suit']}")
 
-        # Если игра нечётная — это потенциальный донор (берём по первой карте)
+        # Если в игре нет победителя — просто логируем и выходим
+        if not game['has_winner']:
+            logger.info(f"⏭️ Игра #{game_num} без победителя, пропускаем")
+            return
+
+        # Если игра нечётная — это донор
         if game_num % 2 == 1:
             rule = get_rule_for_game(game_num)
             last_donor = {
@@ -178,49 +187,41 @@ def handle_new_game(update: Update, context: CallbackContext):
             logger.info(f"📌 Запомнен донор #{game_num} с мастью {game['first_suit']}, правило: {rule}")
             return
 
-        # Если игра чётная и у нас есть донор — проверяем, не контрольная ли это
-        if last_donor:
-            expected_control = normalize_game_num(last_donor['num'] + 3)
-            if game_num == expected_control:
-                logger.info(f"🔍 Найден контроль #{game_num} для донора #{last_donor['num']}")
+        # Если игра чётная — проверяем, не контроль ли это
+        if last_donor and game_num == normalize_game_num(last_donor['num'] + 3):
+            logger.info(f"🔍 Найден контроль #{game_num} для донора #{last_donor['num']}")
 
-                # Проверяем, есть ли масть донора в первых двух картах игрока
-                if last_donor['first_suit'] in game['first_two_suits']:
-                    logger.info(f"✅ Масть {last_donor['first_suit']} подтвердилась!")
+            if last_donor['first_suit'] in game['first_two_suits']:
+                logger.info(f"✅ Масть {last_donor['first_suit']} подтвердилась!")
 
-                    # Определяем целевую игру (следующая нечётная после контроля)
-                    target = game_num + 1
-                    while target % 2 == 0:
-                        target += 1
+                target = normalize_game_num(game_num + 1)
+                while target % 2 == 0:
+                    target += 1
                     target = normalize_game_num(target)
 
-                    # Определяем противоположную масть по правилу донора
-                    target_suit = get_opposite_suit(last_donor['first_suit'], last_donor['rule'])
+                target_suit = get_opposite_suit(last_donor['first_suit'], last_donor['rule'])
 
-                    # Отправляем прогноз
-                    msg = (
-                        f"🎯 *ПРОГНОЗ*\n"
-                        f"━━━━━━━━━━━━━━━\n\n"
-                        f"📌 Донор: #{last_donor['num']} (масть {last_donor['first_suit']})\n"
-                        f"✅ Контроль: #{game_num} (подтверждено)\n"
-                        f"🎯 Цель: #{target}\n"
-                        f"🃏 Ставка: масть {target_suit}\n\n"
-                        f"⚡️ Ждём у игрока слева"
-                    )
+                msg = (
+                    f"🎯 *ПРОГНОЗ*\n"
+                    f"━━━━━━━━━━━━━━━\n\n"
+                    f"📌 Донор: #{last_donor['num']} (масть {last_donor['first_suit']})\n"
+                    f"✅ Контроль: #{game_num} (подтверждено)\n"
+                    f"🎯 Цель: #{target}\n"
+                    f"🃏 Ставка: масть {target_suit}\n\n"
+                    f"⚡️ Ждём у игрока слева"
+                )
 
-                    context.bot.send_message(
-                        chat_id=OUTPUT_CHANNEL_ID,
-                        text=msg,
-                        parse_mode='Markdown'
-                    )
-                    logger.info(f"✅ Прогноз отправлен: #{target} → {target_suit}")
-                else:
-                    logger.info(f"❌ Масть {last_donor['first_suit']} не подтвердилась в контроле")
-
-                # В любом случае сбрасываем донора
-                last_donor = None
+                context.bot.send_message(
+                    chat_id=OUTPUT_CHANNEL_ID,
+                    text=msg,
+                    parse_mode='Markdown'
+                )
+                logger.info(f"✅ Прогноз отправлен: #{target} → {target_suit}")
             else:
-                logger.info(f"⏭️ Игра #{game_num} не является ожидаемым контролем (ожидался #{expected_control})")
+                logger.info(f"❌ Масть {last_donor['first_suit']} не подтвердилась в контроле")
+
+            # Сбрасываем донора
+            last_donor = None
 
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
@@ -234,10 +235,7 @@ def start(update: Update, context: CallbackContext):
     update.message.reply_text(
         "✅ *Бот прогнозов запущен*\n"
         f"Игры: 1–{MAX_GAME_NUMBER} (циклически)\n"
-        "Логика: донор (нечётная, первая карта) → контроль N+3 → цель N+5\n"
-        "Правила смены мастей по диапазонам:\n"
-        "• 1-9,20-29,40-49... : красная↔чёрная (♥️↔♣️, ♦️↔♠️)\n"
-        "• 10-19,30-39,50-59... : красная↔красная (♥️↔♦️), чёрная↔чёрная (♠️↔♣️)"
+        "Логика: донор (нечётная, первая карта) → контроль N+3 → цель N+5"
     )
 
 
@@ -279,12 +277,8 @@ def main():
     print("✅ Донор: нечётная игра, ПЕРВАЯ карта игрока")
     print("✅ Контроль: N+3, первые две карты игрока")
     print("✅ Цель: N+5, противоположная масть")
-    print("✅ Правила по диапазонам:")
-    print("   • 1-9,20-29,40-49... : красная↔чёрная (♥️↔♣️, ♦️↔♠️)")
-    print("   • 10-19,30-39,50-59... : красная↔красная (♥️↔♦️), чёрная↔чёрная (♠️↔♣️)")
     print("="*60)
 
-    # 👇 ВАЖНО: добавляем allowed_updates для каналов
     updater.start_polling(allowed_updates=['message', 'channel_post', 'edited_channel_post'])
     updater.idle()
 
