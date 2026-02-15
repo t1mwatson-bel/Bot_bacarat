@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import logging
 import re
+import asyncio
 import time
 import sys
 import signal
@@ -61,6 +62,7 @@ class GameStorage:
         self.prediction_counter = 0
 
 storage = GameStorage()
+application = None  # Глобальная ссылка на приложение
 
 def is_valid_game(game_num):
     """Проверяет, входит ли игра в нужные диапазоны и нечетная ли она"""
@@ -272,19 +274,29 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if isinstance(context.error, Conflict):
             logger.warning("⚠️ Обнаружен конфликт с другим экземпляром бота")
-            # Выходим с кодом ошибки
+            # Останавливаем приложение
+            if application:
+                await application.stop()
             sys.exit(1)
         else:
             logger.error(f"❌ Ошибка: {context.error}")
     except Exception as e:
         logger.error(f"❌ Ошибка в error_handler: {e}")
 
-def signal_handler(signum, frame):
-    """Обработчик сигналов для graceful shutdown"""
-    logger.info("🛑 Получен сигнал остановки, завершаем работу...")
+async def shutdown():
+    """Graceful shutdown"""
+    logger.info("🛑 Завершение работы...")
+    if application:
+        await application.stop()
     sys.exit(0)
 
+def signal_handler():
+    """Обработчик сигналов"""
+    asyncio.create_task(shutdown())
+
 def main():
+    global application
+    
     print("\n" + "="*60)
     print("🤖 БОТ ДЛЯ АНАЛИЗА ПАТТЕРНОВ ЗАПУЩЕН")
     print("="*60)
@@ -297,15 +309,14 @@ def main():
     print("   - Пики (♠️) -> Бубна (♦️)")
     print("="*60)
     
-    # Устанавливаем обработчик сигналов
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    # Создаем новый event loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     
     max_retries = 3
     retry_count = 0
     
     while retry_count < max_retries:
-        application = None
         try:
             # Создаем Application
             application = Application.builder().token(TOKEN).build()
@@ -321,27 +332,41 @@ def main():
             
             # Запускаем бота
             logger.info("🚀 Запуск бота...")
-            application.run_polling(drop_pending_updates=True)
+            
+            # Запускаем polling в текущем event loop
+            loop.run_until_complete(application.initialize())
+            loop.run_until_complete(application.start())
+            loop.run_until_complete(application.updater.start_polling(
+                drop_pending_updates=True,
+                allowed_updates=['message', 'channel_post']
+            ))
+            
+            # Держим бота запущенным
+            loop.run_forever()
             break
             
-        except Exception as e:
-            if "Conflict" in str(e):
-                retry_count += 1
-                logger.warning(f"⚠️ Конфликт при запуске. Попытка {retry_count}/{max_retries}")
-                if retry_count < max_retries:
-                    time.sleep(5)  # Ждем 5 секунд перед повторной попыткой
-                else:
-                    logger.error("❌ Не удалось запустить бота после нескольких попыток")
-                    sys.exit(1)
+        except Conflict:
+            retry_count += 1
+            logger.warning(f"⚠️ Конфликт при запуске. Попытка {retry_count}/{max_retries}")
+            if retry_count < max_retries:
+                time.sleep(5)
             else:
-                logger.error(f"❌ Критическая ошибка: {e}")
+                logger.error("❌ Не удалось запустить бота после нескольких попыток")
                 sys.exit(1)
+        except KeyboardInterrupt:
+            logger.info("🛑 Получен сигнал остановки")
+            break
+        except Exception as e:
+            logger.error(f"❌ Критическая ошибка: {e}")
+            sys.exit(1)
         finally:
+            # Останавливаем приложение
             if application:
                 try:
-                    application.stop()
+                    loop.run_until_complete(application.stop())
                 except:
                     pass
+            loop.close()
 
 if __name__ == "__main__":
     main()
