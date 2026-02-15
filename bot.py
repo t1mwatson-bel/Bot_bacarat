@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 class GameStorage:
     def __init__(self):
         self.games = {}  # История игр
-        self.patterns = {}  # Ожидающие паттерны: {game_num: {'suit': suit, 'source_game': source_game}}
+        self.patterns = {}  # Ожидающие паттерны: {check_game: {'suit': suit, 'source_game': source_game}}
         self.predictions = {}  # Активные прогнозы
         self.stats = {'wins': 0, 'losses': 0}
         self.prediction_counter = 0
@@ -172,6 +172,9 @@ async def check_patterns(game_num, game_data, context):
     if not first_suit:
         return
     
+    # Проверяем, четная или нечетная игра
+    is_odd = game_num % 2 != 0
+    
     # Проверяем, есть ли паттерн для этой игры
     if game_num in storage.patterns:
         pattern = storage.patterns[game_num]
@@ -217,7 +220,7 @@ async def check_patterns(game_num, game_data, context):
                 storage.predictions[pred_id] = prediction
                 
                 logger.info(f"🎯 ПАТТЕРН ПОДТВЕРЖДЕН!")
-                logger.info(f"   Исходная игра #{pattern['source_game']}: масть {pattern['suit']}")
+                logger.info(f"   Исходная игра #{pattern['source_game']} (НЕЧЕТНАЯ): масть {pattern['suit']}")
                 logger.info(f"   Проверочная игра #{game_num}: масть найдена")
                 logger.info(f"🤖 НОВЫЙ ПРОГНОЗ #{pred_id}: {predicted_suit} в игре #{target_game}")
                 logger.info(f"📋 Проверка: {check_games}")
@@ -230,15 +233,18 @@ async def check_patterns(game_num, game_data, context):
         # Удаляем обработанный паттерн
         del storage.patterns[game_num]
     
-    # Создаем новый паттерн для проверки через 3 игры
-    check_game = game_num + 3
-    storage.patterns[check_game] = {
-        'suit': first_suit,
-        'source_game': game_num,
-        'created': datetime.now()
-    }
-    
-    logger.info(f"📝 Создан паттерн: игра #{game_num}({first_suit}) -> проверка в #{check_game} (ищем в 1й или 2й карте)")
+    # Создаем новый паттерн ТОЛЬКО от НЕЧЕТНЫХ игр
+    if is_odd:
+        check_game = game_num + 3
+        storage.patterns[check_game] = {
+            'suit': first_suit,
+            'source_game': game_num,
+            'created': datetime.now()
+        }
+        
+        logger.info(f"📝 Создан паттерн от НЕЧЕТНОЙ игры #{game_num}({first_suit}) -> проверка в #{check_game} (ищем в 1й или 2й карте)")
+    else:
+        logger.info(f"⏭️ Игра #{game_num} ЧЕТНАЯ - пропускаем создание паттерна")
 
 async def check_predictions(game_num, game_data, context):
     """Проверяет активные прогнозы"""
@@ -276,7 +282,7 @@ async def send_prediction(prediction, context):
             f"🎯 *НОВЫЙ ПРОГНОЗ #{prediction['id']}*\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"📊 *ДЕТАЛИ:*\n"
-            f"┣ 🎮 Исходная игра: #{prediction['source']}\n"
+            f"┣ 🎮 Исходная игра: #{prediction['source']} (НЕЧЕТНАЯ)\n"
             f"┣ 🎯 Целевая игра: #{prediction['target']}\n"
             f"┣ 🃏 Прогнозируемая масть: {prediction['suit']}\n"
             f"┣ 🔄 Догон 1: #{prediction['check_games'][1]}\n"
@@ -317,7 +323,7 @@ async def update_prediction_result(prediction, game_num, result, context):
             f"{emoji} *ПРОГНОЗ #{prediction['id']} {status}!* {result_emoji}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"📊 *РЕЗУЛЬТАТ:*\n"
-            f"┣ 🎮 Исходная игра: #{prediction['source']}\n"
+            f"┣ 🎮 Исходная игра: #{prediction['source']} (НЕЧЕТНАЯ)\n"
             f"┣ 🎯 Целевая игра: #{prediction['target']}\n"
             f"┣ 🃏 Масть: {prediction['suit']}\n"
             f"┣ 🔄 Попытка: {attempt_text}\n"
@@ -348,7 +354,7 @@ async def update_prediction_message(prediction, context):
             f"🔄 *ПРОГНОЗ #{prediction['id']} - ДОГОН {prediction['attempt']}*\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"📊 *ДЕТАЛИ:*\n"
-            f"┣ 🎮 Исходная игра: #{prediction['source']}\n"
+            f"┣ 🎮 Исходная игра: #{prediction['source']} (НЕЧЕТНАЯ)\n"
             f"┣ 🎯 Целевая игра: #{prediction['target']}\n"
             f"┣ 🃏 Масть: {prediction['suit']}\n"
             f"┣ 🔄 Текущая попытка: {prediction['attempt']}/2\n"
@@ -388,7 +394,7 @@ async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
         first_suit = game_data['first_suit']
         second_suit = game_data['second_suit']
         
-        logger.info(f"📊 Игра #{game_num}: 1-я карта {first_suit}, 2-я карта {second_suit}")
+        logger.info(f"📊 Игра #{game_num} ({'НЕЧЕТНАЯ' if game_num%2 else 'ЧЕТНАЯ'}): 1-я карта {first_suit}, 2-я карта {second_suit}")
         
         # Сохраняем игру в историю
         storage.games[game_num] = game_data
@@ -430,7 +436,7 @@ def main():
     print("🤖 БОТ ДЛЯ АНАЛИЗА ПАТТЕРНОВ ЗАПУЩЕН")
     print("="*60)
     print("✅ Логика работы:")
-    print("   1️⃣ Запоминает первую карту в игре")
+    print("   1️⃣ Создает паттерны ТОЛЬКО от НЕЧЕТНЫХ игр")
     print("   2️⃣ Ждет подтверждения через 3 игры")
     print("   3️⃣ Проверяет ИЛИ в первой карте, ИЛИ во второй")
     print("   4️⃣ Если масть совпала - дает прогноз")
