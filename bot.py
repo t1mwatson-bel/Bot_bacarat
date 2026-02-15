@@ -7,7 +7,7 @@ import os
 import requests
 
 # ==================== НАСТРОЙКИ ====================
-TOKEN = os.getenv("TOKEN", "1163348874:AAFgZEXveILvD4MbhQ8jiLTwIxs4puYhmq0")
+TOKEN = os.getenv("TOKEN", "5482422004:AAHXLYyZ-qoCsycse1k9Qt6YRi9jmB24B-k")
 INPUT_CHANNEL_ID = int(os.getenv("INPUT_CHANNEL_ID", "-1003469691743"))
 OUTPUT_CHANNEL_ID = int(os.getenv("OUTPUT_CHANNEL_ID", "-1003842401391"))
 ADMIN_ID = int(os.getenv("ADMIN_ID", "683219603"))
@@ -144,18 +144,27 @@ def handle_new_game(update: Update, context: CallbackContext):
     global last_donor
 
     try:
+        # 🔥 ТЕСТОВЫЙ ЛОГ — сразу видно, доходит ли сообщение
+        logger.info(f"🔥🔥🔥 Получен update: {update}")
+        if update.channel_post:
+            logger.info(f"🔥 Есть channel_post! Текст: {update.channel_post.text}")
+        else:
+            logger.info(f"🔥 Нет channel_post, это другое: {update}")
+
         if not update.channel_post or update.channel_post.chat_id != INPUT_CHANNEL_ID:
+            logger.info(f"⏭️ Не тот канал или нет channel_post")
             return
 
         text = update.channel_post.text
-        logger.info(f"📥 Получено: {text[:100]}...")
+        logger.info(f"📥 Получено из канала: {text[:100]}...")
 
         game = parse_game(text)
         if not game:
+            logger.info("❌ Не удалось распарсить игру")
             return
 
         game_num = game['num']
-        logger.info(f"✅ Распарсена игра #{game_num}, масти: {game['first_two_suits']}")
+        logger.info(f"✅ Распарсена игра #{game_num}, первая масть: {game['first_suit']}, первые две: {game['first_two_suits']}")
 
         # Если игра нечётная — это потенциальный донор (берём по первой карте)
         if game_num % 2 == 1:
@@ -205,10 +214,12 @@ def handle_new_game(update: Update, context: CallbackContext):
                     )
                     logger.info(f"✅ Прогноз отправлен: #{target} → {target_suit}")
                 else:
-                    logger.info(f"❌ Масть {last_donor['first_suit']} не подтвердилась")
+                    logger.info(f"❌ Масть {last_donor['first_suit']} не подтвердилась в контроле")
 
                 # В любом случае сбрасываем донора
                 last_donor = None
+            else:
+                logger.info(f"⏭️ Игра #{game_num} не является ожидаемым контролем (ожидался #{expected_control})")
 
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
@@ -272,7 +283,8 @@ def main():
     print("   • 10-19,30-39,50-59... : красная↔красная (♥️↔♦️), чёрная↔чёрная (♠️↔♣️)")
     print("="*60)
 
-    updater.start_polling()
+    # 👇 ВАЖНО: добавляем allowed_updates для каналов
+    updater.start_polling(allowed_updates=['message', 'channel_post', 'edited_channel_post'])
     updater.idle()
 
 
