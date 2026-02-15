@@ -7,7 +7,7 @@ import os
 import requests
 
 # ==================== НАСТРОЙКИ ====================
-TOKEN = os.getenv("TOKEN", "1163348874:AAFgZEXveILvD4MbhQ8jiLTwIxs4puYhmq0")
+TOKEN = os.getenv("TOKEN", "5482422004:AAHKwdpP9ARXWDhhuqqO_9rDKRjjH7rePZs")
 INPUT_CHANNEL_ID = int(os.getenv("INPUT_CHANNEL_ID", "-1003469691743"))
 OUTPUT_CHANNEL_ID = int(os.getenv("OUTPUT_CHANNEL_ID", "-1003842401391"))
 ADMIN_ID = int(os.getenv("ADMIN_ID", "683219603"))
@@ -198,6 +198,7 @@ def get_rule_for_game(game_num):
         1400: 'red_black', # 1400-1409
         1410: 'same_color', # 1410-1419
         1420: 'red_black', # 1420-1429
+        1430: 'same_color', # 1430-1439
     }
     
     return rule_map.get(decade, None)
