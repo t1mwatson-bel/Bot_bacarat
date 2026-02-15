@@ -113,6 +113,12 @@ def parse_game_data(text):
     
     game_num = int(match.group(1))
     
+    # Проверяем наличие специальных тегов
+    has_r_tag = '#R' in text
+    has_x_tag = '#X' in text or '#X🟡' in text
+    has_check = '✅' in text
+    has_t = re.search(r'#T\d+', text) is not None
+    
     # Ищем масти в тексте
     suits = []
     suit_patterns = {
@@ -137,11 +143,17 @@ def parse_game_data(text):
     first_suit = suits[0] if len(suits) > 0 else None
     second_suit = suits[1] if len(suits) > 1 else None
     
+    logger.info(f"📊 Теги: #R={has_r_tag}, #X={has_x_tag}, #T={has_t}")
+    
     return {
         'game_num': game_num,
         'first_suit': first_suit,
         'second_suit': second_suit,
-        'all_suits': suits
+        'all_suits': suits,
+        'has_r_tag': has_r_tag,
+        'has_x_tag': has_x_tag,
+        'has_check': has_check,
+        'has_t': has_t
     }
 
 def compare_suits(suit1, suit2):
@@ -209,7 +221,6 @@ async def check_patterns(game_num, game_data, context):
                     'id': pred_id,
                     'suit': predicted_suit,
                     'target': target_game,
-                    'source': pattern['source_game'],
                     'check_games': check_games,
                     'status': 'pending',
                     'attempt': 0,
@@ -256,9 +267,18 @@ async def check_predictions(game_num, game_data, context):
             game_idx = pred['check_games'].index(game_num)
             
             if game_idx == pred['attempt']:
-                # Проверяем, есть ли нужная масть
-                if pred['suit'] in game_data['all_suits']:
-                    logger.info(f"✅ ПРОГНОЗ #{pred_id} ВЫИГРАЛ в игре #{game_num}")
+                # Проверяем, есть ли нужная масть в картах
+                suit_found = pred['suit'] in game_data['all_suits']
+                
+                # Дополнительно проверяем наличие тегов, указывающих на результат
+                has_result_tag = game_data.get('has_r_tag', False) or game_data.get('has_x_tag', False) or game_data.get('has_check', False)
+                
+                if suit_found or has_result_tag:
+                    if suit_found:
+                        logger.info(f"✅ ПРОГНОЗ #{pred_id} ВЫИГРАЛ в игре #{game_num} (нашли масть)")
+                    else:
+                        logger.info(f"✅ ПРОГНОЗ #{pred_id} ВЫИГРАЛ в игре #{game_num} (по тегу #R/#X)")
+                    
                     pred['status'] = 'win'
                     storage.stats['wins'] += 1
                     await update_prediction_result(pred, game_num, 'win', context)
@@ -282,7 +302,6 @@ async def send_prediction(prediction, context):
             f"🎯 *НОВЫЙ ПРОГНОЗ #{prediction['id']}*\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"📊 *ДЕТАЛИ:*\n"
-            f"┣ 🎮 Исходная игра: #{prediction['source']} (НЕЧЕТНАЯ)\n"
             f"┣ 🎯 Целевая игра: #{prediction['target']}\n"
             f"┣ 🃏 Прогнозируемая масть: {prediction['suit']}\n"
             f"┣ 🔄 Догон 1: #{prediction['check_games'][1]}\n"
@@ -323,7 +342,6 @@ async def update_prediction_result(prediction, game_num, result, context):
             f"{emoji} *ПРОГНОЗ #{prediction['id']} {status}!* {result_emoji}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"📊 *РЕЗУЛЬТАТ:*\n"
-            f"┣ 🎮 Исходная игра: #{prediction['source']} (НЕЧЕТНАЯ)\n"
             f"┣ 🎯 Целевая игра: #{prediction['target']}\n"
             f"┣ 🃏 Масть: {prediction['suit']}\n"
             f"┣ 🔄 Попытка: {attempt_text}\n"
@@ -354,7 +372,6 @@ async def update_prediction_message(prediction, context):
             f"🔄 *ПРОГНОЗ #{prediction['id']} - ДОГОН {prediction['attempt']}*\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"📊 *ДЕТАЛИ:*\n"
-            f"┣ 🎮 Исходная игра: #{prediction['source']} (НЕЧЕТНАЯ)\n"
             f"┣ 🎯 Целевая игра: #{prediction['target']}\n"
             f"┣ 🃏 Масть: {prediction['suit']}\n"
             f"┣ 🔄 Текущая попытка: {prediction['attempt']}/2\n"
@@ -383,7 +400,7 @@ async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         logger.info(f"\n{'='*60}")
-        logger.info(f"📥 Получено: {text[:100]}...")
+        logger.info(f"📥 Получено: {text[:150]}...")
         
         # Парсим данные игры
         game_data = parse_game_data(text)
@@ -441,6 +458,7 @@ def main():
     print("   3️⃣ Проверяет ИЛИ в первой карте, ИЛИ во второй")
     print("   4️⃣ Если масть совпала - дает прогноз")
     print("   5️⃣ Проверяет с догоном на 2 игры")
+    print("   6️⃣ Учитывает теги #R, #X при проверке результатов")
     print("="*60)
     
     # Проверяем блокировку
