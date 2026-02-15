@@ -6,11 +6,13 @@ from datetime import datetime
 from collections import defaultdict
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from telegram.error import Conflict
+import time
 
 # === НАСТРОЙКИ ===
 TOKEN = "1163348874:AAFgZEXveILvD4MbhQ8jiLTwIxs4puYhmq0"
 INPUT_CHANNEL_ID = -1003469691743
-OUTPUT_CHANNEL_ID = -1003842401391
+OUTPUT_CHANNEL_ID = -1003855079501
 
 # Диапазоны игр, которые нас интересуют
 VALID_RANGES = [
@@ -90,8 +92,17 @@ def parse_game_data(text):
         '♦️': r'[♦♢]'
     }
     
+    # Ищем в левой части (до разделителя)
+    left_part = text.split('🔰')[0] if '🔰' in text else text
+    
     for suit, pattern in suit_patterns.items():
-        if re.search(pattern, text):
+        matches = re.findall(pattern, left_part)
+        for _ in matches:
+            suits.append(suit)
+    
+    if not suits:
+        # Если не нашли в левой части, ищем во всем тексте
+        for suit, pattern in suit_patterns.items():
             matches = re.findall(pattern, text)
             for _ in matches:
                 suits.append(suit)
@@ -110,21 +121,21 @@ def get_next_game(current_game, step=1):
     next_game = current_game + step
     
     # Проверяем, не вышли ли за пределы текущего диапазона
-    for start, end in VALID_RANGES:
+    for i, (start, end) in enumerate(VALID_RANGES):
         if start <= current_game <= end:
             if next_game > end:
                 # Ищем следующий диапазон
-                for next_start, _ in VALID_RANGES:
-                    if next_start > current_game:
-                        return next_start
-                # Если дошли до конца, возвращаем первый
-                return VALID_RANGES[0][0]
+                if i + 1 < len(VALID_RANGES):
+                    return VALID_RANGES[i + 1][0]
+                else:
+                    # Если дошли до конца, возвращаем первый
+                    return VALID_RANGES[0][0]
             break
     
     return next_game
 
 def check_pattern(game_num, current_suit):
-    """Проверяет,形成ился ли паттерн"""
+    """Проверяет, сформировался ли паттерн"""
     prev_game = game_num - 3
     
     if prev_game in storage.games:
@@ -150,26 +161,33 @@ async def check_predictions(game_num, game_data):
                     logger.info(f"✅ Прогноз #{pred_id} выиграл в игре #{game_num}")
                     pred['status'] = 'win'
                     storage.stats['wins'] += 1
-                    await send_result(pred_id, 'win', game_num)
+                    await send_result(pred_id, 'win', game_num, pred)
                 else:
                     logger.info(f"❌ Прогноз #{pred_id} не выиграл в игре #{game_num}")
                     
                     if pred['attempt'] >= len(pred['check_games']) - 1:
                         pred['status'] = 'loss'
                         storage.stats['losses'] += 1
-                        await send_result(pred_id, 'loss', game_num)
+                        await send_result(pred_id, 'loss', game_num, pred)
                     else:
                         pred['attempt'] += 1
-                        await update_prediction(pred_id)
+                        await update_prediction(pred_id, pred)
 
-async def send_result(pred_id, result, game_num):
-    """Отправляет результат прогноза (заглушка)"""
-    # Здесь будет отправка в Telegram
-    logger.info(f"📊 Результат прогноза #{pred_id}: {result} в игре #{game_num}")
+async def send_result(pred_id, result, game_num, pred):
+    """Отправляет результат прогноза"""
+    # Здесь будет отправка в Telegram, пока просто логируем
+    if result == 'win':
+        emoji = "✅"
+    else:
+        emoji = "❌"
+    
+    logger.info(f"{emoji} Прогноз #{pred_id}: {result} в игре #{game_num} (масть {pred['suit']})")
+    logger.info(f"📊 Статистика: {storage.stats['wins']} побед, {storage.stats['losses']} поражений")
 
-async def update_prediction(pred_id):
-    """Обновляет статус прогноза (заглушка)"""
-    logger.info(f"🔄 Обновление прогноза #{pred_id}")
+async def update_prediction(pred_id, pred):
+    """Обновляет статус прогноза"""
+    next_game = pred['check_games'][pred['attempt']]
+    logger.info(f"🔄 Прогноз #{pred_id} переходит к догону {pred['attempt']}, следующая игра: #{next_game}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает входящие сообщения"""
@@ -189,7 +207,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         game_num = game_data['game_num']
-        logger.info(f"📊 Игра #{game_num}: первая карта {game_data['first_suit']}")
+        logger.info(f"📊 Игра #{game_num}: первая карта {game_data['first_suit']}, всего карт: {len(game_data['all_suits'])}")
         
         # Сохраняем игру
         storage.games[game_num] = game_data
@@ -203,21 +221,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if predicted_suit:
             target_game = get_next_game(game_num, 1)
             
-            # Создаем прогноз
-            storage.prediction_counter += 1
-            pred_id = storage.prediction_counter
+            # Проверяем, не создавали ли уже прогноз на эту игру
+            already_exists = False
+            for pred in storage.predictions.values():
+                if pred['target'] == target_game and pred['status'] == 'pending':
+                    already_exists = True
+                    break
             
-            # Игры для догона
-            check_games = [
-                target_game,
-                get_next_game(target_game, 1),
-                get_next_game(target_game, 2)
-            ]
-            
-            # Фильтруем только валидные игры
-            check_games = [g for g in check_games if is_valid_game(g)]
-            
-            if check_games:
+            if not already_exists and is_valid_game(target_game):
+                # Создаем прогноз
+                storage.prediction_counter += 1
+                pred_id = storage.prediction_counter
+                
+                # Игры для догона
+                check_games = [target_game]
+                
+                # Добавляем догоны, если они в допустимых диапазонах
+                next1 = get_next_game(target_game, 1)
+                if is_valid_game(next1):
+                    check_games.append(next1)
+                
+                next2 = get_next_game(target_game, 2)
+                if is_valid_game(next2):
+                    check_games.append(next2)
+                
                 prediction = {
                     'id': pred_id,
                     'suit': predicted_suit,
@@ -238,7 +265,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             del storage.games[oldest]
             
     except Exception as e:
-        logger.error(f"❌ Ошибка: {e}")
+        logger.error(f"❌ Ошибка в handle_message: {e}")
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает ошибки"""
+    try:
+        if isinstance(context.error, Conflict):
+            logger.warning("⚠️ Обнаружен конфликт с другим экземпляром бота")
+            # Выходим с кодом ошибки, чтобы контейнер перезапустился
+            import sys
+            sys.exit(1)
+        else:
+            logger.error(f"❌ Необработанная ошибка: {context.error}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка в error_handler: {e}")
 
 def main():
     print("\n" + "="*60)
@@ -253,17 +293,38 @@ def main():
     print("   - Пики (♠️) -> Бубна (♦️)")
     print("="*60)
     
-    # Создаем приложение
-    application = Application.builder().token(TOKEN).build()
+    max_retries = 3
+    retry_count = 0
     
-    # Добавляем обработчик
-    application.add_handler(MessageHandler(
-        filters.Chat(INPUT_CHANNEL_ID) & filters.TEXT,
-        handle_message
-    ))
-    
-    # Запускаем бота
-    application.run_polling()
+    while retry_count < max_retries:
+        try:
+            # Создаем приложение
+            application = Application.builder().token(TOKEN).build()
+            
+            # Добавляем обработчик ошибок
+            application.add_error_handler(error_handler)
+            
+            # Добавляем обработчик сообщений
+            application.add_handler(MessageHandler(
+                filters.Chat(INPUT_CHANNEL_ID) & filters.TEXT,
+                handle_message
+            ))
+            
+            # Запускаем бота
+            application.run_polling(drop_pending_updates=True)
+            break
+            
+        except Conflict:
+            retry_count += 1
+            logger.warning(f"⚠️ Конфликт при запуске. Попытка {retry_count}/{max_retries}")
+            if retry_count < max_retries:
+                time.sleep(5)  # Ждем 5 секунд перед повторной попыткой
+            else:
+                logger.error("❌ Не удалось запустить бота после нескольких попыток")
+                raise
+        except Exception as e:
+            logger.error(f"❌ Критическая ошибка: {e}")
+            raise
 
 if __name__ == "__main__":
     main()
