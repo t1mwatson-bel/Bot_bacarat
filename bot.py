@@ -1,219 +1,146 @@
-# -*- coding: utf-8 -*-
 import logging
+from telegram import Update, Bot
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
 import re
-import os
-import requests
-from telegram import Update
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 
-# ==================== НАСТРОЙКИ (только из env) ====================
-TOKEN = os.getenv("5482422004:AAHXLYyZ-qoCsycse1k9Qt6YRi9jmB24B-k")
-INPUT_CHANNEL_ID = os.getenv("-1003469691743")
-OUTPUT_CHANNEL_ID = os.getenv("-1003855079501")
-ADMIN_ID = os.getenv("683219603")
-
-# Проверка обязательных переменных
-if not TOKEN:
-    raise ValueError("Ошибка: TOKEN не задан в переменных окружения")
-if not INPUT_CHANNEL_ID:
-    raise ValueError("Ошибка: INPUT_CHANNEL_ID не задан в переменных окружения")
-if not OUTPUT_CHANNEL_ID:
-    raise ValueError("Ошибка: OUTPUT_CHANNEL_ID не задан в переменных окружения")
-if not ADMIN_ID:
-    raise ValueError("Ошибка: ADMIN_ID не задан в переменных окружения")
-
-# Приведение к нужным типам
-INPUT_CHANNEL_ID = int(INPUT_CHANNEL_ID)
-OUTPUT_CHANNEL_ID = int(OUTPUT_CHANNEL_ID)
-ADMIN_ID = int(ADMIN_ID)
-
-MAX_GAME_NUMBER = 1440  # Макс. номер игры (не меняется)
+# Настройки
+INPUT_CHANNEL_ID = -1003469691743
+OUTPUT_CHANNEL_ID = -10038424013911
+TOKEN = "5482422004:AAHXLYyZ-qoCsycse1k9Qt6YRi9jmB24B-k"
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
-# ==================== ХРАНИЛИЩЕ (через context.bot_data) ====================
+# Хранилище донора (в реальной реализации лучше использовать БД/Redis)
+_donor_storage = {}
+
 def get_donor(context: CallbackContext):
-    return context.bot_data.get('donor')
+    return _donor_storage.get(context.chat_data["id"])
 
 def set_donor(context: CallbackContext, donor):
-    context.bot_data['donor'] = donor
+    _donor_storage[context.chat_data["id"]] = donor
 
-# ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
-def norm(num):
-    """Приводит номер игры в диапазон 1..MAX_GAME_NUMBER."""
-    while num > MAX_GAME_NUMBER:
-        num -= MAX_GAME_NUMBER
-    while num < 1:
-        num += MAX_GAME_NUMBER
-    return num
 
-def get_rule(game_num):
-    """Определяет правило: чередование каждые 10 игр."""
-    start = (game_num // 10) * 10
-    return 'red_black' if (start % 20 == 0) else 'same_color'
+def norm(num: int) -> int:
+    """Нормализует номер игры (если > 1440)."""
+    return (num - 1) % 1440 + 1
 
-def get_opposite(suit, rule):
+def get_rule(donor_num: int) -> str:
+    """Определяет правило замены по номеру донора."""
+    if 1 <= (donor_num - 1) % 1440 + 1 <= 9:
+        return "red_black"  # ♥️↔♣️, ♦️↔♠️
+    elif 10 <= (donor_num - 1) % 1440 + 1 <= 19:
+        return "same_color"  # ♥️↔♦️, ♣️↔♠️
+    else:
+        return "red_black"
+
+def get_opposite(suit: str, rule: str) -> str:
     """Возвращает противоположную масть по правилу."""
-    if rule == 'red_black':
-        return {'♥️': '♣️', '♣️': '♥️', '♦️': '♠️', '♠️': '♦️'}.get(suit, suit)
-    else:  # same_color
-        return {'♥️': '♦️', '♦️': '♥️', '♠️': '♣️', '♣️': '♠️'}.get(suit, suit)
-
-# ==================== ПАРСИНГ СООБЩЕНИЯ ====================
-def parse_game(text):
-    """
-    Извлекает номер игры и масти из текста.
-    Возвращает dict или None, если парсинг не удался.
-    """
-    # Ищем номер игры #N123
-    match = re.search(r'#N(\d+)', text)
-    if not match:
-        logger.warning("Не найден номер игры в сообщении: %s", text)
-        return None
-
-    try:
-        game_num = int(match.group(1))
-        if game_num <= 0:
-            logger.warning("Номер игры <= 0: %d", game_num)
-            return None
-    except ValueError:
-        logger.warning("Некорректный номер игры: %s", match.group(1))
-        return None
-
-    # Ищем часть до разделителя (-, 👉👈, 👈👉)
-    left = text
-    for sep in ['-', '👉👈', '👈👉']:
-        if sep in text:
-            left = text.split(sep)[0].strip()
-            break
-
-    # Ищем карты в скобках (10♥️ K♠ ...)
-    cards_match = re.search(r'\(([^)]+)\)', left)
-    if not cards_match:
-        logger.warning("Не найдены карты в сообщении: %s", text)
-        return None
-
-    # Извлекаем масти
-    suits = []
-    for card in re.findall(r'([\dAKQJ]+[♥♠♣♦]?)', cards_match.group(1)):
-        if '♥' in card:
-            suits.append('♥️')
-        elif '♠' in card:
-            suits.append('♠️')
-        elif '♣' in card:
-            suits.append('♣️')
-        elif '♦' in card:
-            suits.append('♦️')
-
-    if not suits:
-        logger.warning("Не извлечены масти из сообщения: %s", text)
-        return None
-
-    return {
-        'num': game_num,
-        'first_suit': suits[0],
-        'first_two': suits[:2]  # Первые две масти
+    opposites = {
+        "red_black": {"♥️": "♣️", "♦️": "♠️", "♣️": "♥️", "♠️": "♦️"},
+        "same_color": {"♥️": "♦️", "♦️": "♥️", "♣️": "♠️", "♠️": "♣️"},
     }
+    return opposites[rule][suit]
 
-# ==================== ОБРАБОТКА СООБЩЕНИЙ ====================
-def handle_game(update: Update, context: CallbackContext):
-    """Обрабатывает пост в канале."""
-    # Проверяем, что это пост из нужного канала
-    if (not update.channel_post 
-            or update.channel_post.chat_id != INPUT_CHANNEL_ID):
+def parse_game(text: str) -> dict or None:
+    """
+    Парсит сообщение вида:
+    #N1071 ✅8 (K♣️8♣️) - 2 (4♦️8♣️)
+    #П1 #T10 #R🔵 #C2_2
+    Возвращает dict с num, first_suit, first_two или None.
+    """
+    try:
+        # Ищем номер игры
+        num_match = re.search(r"#N(\d+)", text)
+        if not num_match:
+            return None
+        num = int(num_match.group(1))
+
+        # Ищем первую масть (первая карта в первой руке)
+        suit_match = re.search(r"\(([A2-9TJQK][♥️♦️♣️♠️])", text)
+        if not suit_match:
+            return None
+        first_suit = suit_match.group(1)[1]  # извлекаем символ масти
+
+
+        # Ищем первые две масти в первой руке
+        two_suits = re.findall(r"[A2-9TJQK]([♥️♦️♣️♠️)", text.split("-")[0])
+        first_two = [s[0] for s in two_suits[:2]]  # первые две масти
+
+        return {"num": num, "first_suit": first_suit, "first_two": first_two}
+    except Exception as e:
+        logger.error(f"Error parsing game: {e}")
+        return None
+
+async def handle_game(update: Update, context: CallbackContext):
+    if not update.channel_post or update.channel_post.chat_id != INPUT_CHANNEL_ID:
         return
 
-    # Парсим сообщение
     game = parse_game(update.channel_post.text)
     if not game:
-        return  # Парсинг не удался — молча игнорируем
+        logger.info(f"Failed to parse message: {update.channel_post.text}")
+        return
 
-    num = game['num']
-    logger.info("📥 Игра %d, первая масть %s (message_id=%d)",
-                num, game['first_suit'], update.channel_post.message_id)
+    num = game["num"]
+    logger.info(f"📥 Игра {num}, первая масть {game['first_suit']}, message_id={update.channel_post.message_id}")
+
 
     donor = get_donor(context)
 
-    # Если нет донора и игра нечётная — запоминаем
+    # 1. Если нет донора и игра нечётная — запоминаем как донор
     if donor is None and num % 2 == 1:
-        donor_data = {'num': num, 'suit': game['first_suit']}
-        set_donor(context, donor_data)
-        logger.info("📌 Донор %d запомнен, масть %s", num, game['first_suit'])
+        set_donor(
+            context,
+            {
+                "num": num,
+                "suit": game["first_suit"],
+                "checked_n3": False,  # ещё не проверяли N+3
+                "repeated": False,     # пока нет повтора
+            },
+        )
+        logger.info("📌 Донор %d запомнен, масть %s", num, game["first_suit"])
         return
 
-    # Если есть донор и текущая игра — контроль (донор + 3)
-    if donor and num == norm(donor['num'] + 3):
-        if donor['suit'] in game['first_two']:
-            # Формируем прогноз
-            target = norm(num + 2)
-            rule = get_rule(donor['num'])
-            target_suit = get_opposite(donor['suit'], rule)
+    # 2. Если есть донор, проверяем N+3
+    if donor and not donor["checked_n3"]:
+        if num == donor["num"] + 3:
+            # Проверяем, есть ли масть донора в первых двух картах
+            if donor["suit"] in game["first_two"]:
+                donor["repeated"] = True
+            donor["checked_n3"] = True
+            set_donor(context, donor)
 
-            msg = (
-                f"🎯 ПРОГНОЗ\n"
-                f"Донор: #{donor['num']} ({donor['suit']})\n"
-                f"Цель: #{target}\n"
-                f"Ставка: {target_suit}"
-            )
-            context.bot.send_message(chat_id=OUTPUT_CHANNEL_ID, text=msg)
-            logger.info("✅ Прогноз на %d: %s", target, target_suit)
-        else:
-            logger.info("❌ Масть %s не подтвердилась в игре %d", donor['suit'], num)
+    # 3. Если дошли до N+4 и был повтор — выдаём прогноз
+    if num == donor["num"] + 4 and donor["repeated"]:
+        rule = get_rule(donor["num"])
+        target_suit = get_opposite(donor["suit"], rule)
+        target = norm(num)  # цель: N+4 (уже нормализовано)
 
-        # Сбрасываем донора
+        msg = (
+            f"🎯 ПРОГНОЗ\n"
+            f"Донор: #{donor['num']} ({donor['suit']})\n"
+            f"Цель: #{target}\n"
+            f"Ставка: {target_suit}"
+        )
+        await context.bot.send_message(chat_id=OUTPUT_CHANNEL_ID, text=msg)
+        logger.info("✅ Прогноз на %d: %s", target, target_suit)
+
+    # 4. Сбрасываем донора после обработки N+4 (или если пропустили)
+    if num >= donor["num"] + 4:
         set_donor(context, None)
 
-# ==================== КОМАНДЫ ====================
-def start(update: Update, context: CallbackContext):
-    """Команда /start — только для админа."""
-    if update.effective_user.id != ADMIN_ID:
-        update.message.reply_text("⛔ Доступ запрещён")
-        return
-        
-                update.message.reply_text(
-            "✅ Бот запущен. Схема работы:\n"
-            "1. Нечётная игра → запоминается как донор\n"
-            "2. Через 3 игры (контроль) → проверка наличия масти донора\n"
-            "3. Через 2 игры после контроля → выдача прогноза"
-        )
 
-# ==================== ЗАПУСК БОТА ====================
 def main():
-    """Точка входа. Настройка и запуск бота."""
-    # Попытка сбросить webhook (на случай, если он был установлен ранее)
-    try:
-        response = requests.post(
-            f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=True"
-        )
-        if response.status_code != 200:
-            logger.error(f"Не удалось сбросить webhook: HTTP {response.status_code}, ответ: {response.text}")
-        else:
-            logger.info("Webhook сброшен (если был установлен)")
-    except Exception as e:
-        logger.error(f"Ошибка при сбросе webhook: {e}")
+    application = Application.builder().token(TOKEN).build()
 
-    # Инициализация бота
-    updater = Updater(TOKEN, use_context=True)
-    dp = updater.dispatcher
+    # Обработчик сообщений из канала
+    application.add_handler(MessageHandler(filters.TEXT & filters.Chat(INPUT_CHANNEL_ID), handle_game))
 
-    # Регистрация обработчиков
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(
-        MessageHandler(
-            Filters.chat(INPUT_CHANNEL_ID) & Filters.text & ~Filters.command,
-            handle_game
-        )
-    )
 
-    logger.info("🤖 Бот запущен")
-    print("\n🤖 БОТ ЗАПУЩЕН")
-    print("✅ Логика: нечётная донор → контроль N+3 → цель N+5")
-
-    # Запуск polling
-    updater.start_polling(allowed_updates=['channel_post'])
-    updater.idle()
+    application.run_polling()
 
 if __name__ == "__main__":
     main()
