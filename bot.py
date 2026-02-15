@@ -21,13 +21,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ==================== ХРАНИЛИЩЕ ИГР ====================
-# Больше ничего не запоминаем! Только текущего донора.
-last_donor = None
+last_donor = None  # {'num': int, 'first_suit': str, 'rule': str}
 
 
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 def normalize_game_num(num):
-    """Приводит номер игры к диапазону 1–1440 (циклически)."""
     while num > MAX_GAME_NUMBER:
         num -= MAX_GAME_NUMBER
     while num < 1:
@@ -37,14 +35,13 @@ def normalize_game_num(num):
 
 def get_rule_for_game(game_num):
     """
-    Определяет правило смены масти по номеру игры.
-    Чередование каждые 10 игр:
-    - 1-9, 20-29, 40-49... -> 'red_black'  (♥️↔♣️, ♦️↔♠️)
-    - 10-19, 30-39, 50-59... -> 'same_color' (♥️↔♦️, ♠️↔♣️)
+    Правила по диапазонам:
+    - 1-9, 20-29, 40-49, 60-69, 80-89... → 'red_black'
+    - 10-19, 30-39, 50-59, 70-79, 90-99... → 'same_color'
     """
     game_num = normalize_game_num(game_num)
     decade_start = (game_num // 10) * 10
-    # Если начало диапазона 0, 20, 40, 60... — red_black, иначе same_color
+    # Если начало диапазона 0, 20, 40, 60... → red_black, иначе same_color
     if decade_start % 20 == 0:
         return 'red_black'
     else:
@@ -53,10 +50,10 @@ def get_rule_for_game(game_num):
 
 def get_opposite_suit(suit, rule):
     """
-    Возвращает противоположную масть по правилу.
+    red_black:   ♥️↔♣️, ♦️↔♠️
+    same_color:  ♥️↔♦️, ♠️↔♣️
     """
     if rule == 'red_black':
-        # красная ↔ чёрная: ♥️↔♣️, ♦️↔♠️
         if suit == '♥️':
             return '♣️'
         elif suit == '♣️':
@@ -66,8 +63,6 @@ def get_opposite_suit(suit, rule):
         elif suit == '♠️':
             return '♦️'
     elif rule == 'same_color':
-        # красная ↔ красная: ♥️↔♦️
-        # чёрная ↔ чёрная: ♠️↔♣️
         if suit == '♥️':
             return '♦️'
         elif suit == '♦️':
@@ -82,9 +77,9 @@ def get_opposite_suit(suit, rule):
 # ==================== ПАРСИНГ ИГРЫ ====================
 def parse_game(text):
     """
-    Извлекает из текста игры:
+    Берёт из игры:
     - номер игры
-    - первую карту игрока (левую руку)
+    - первую карту игрока (для донора)
     - первые две карты игрока (для контроля)
     """
     if not text:
@@ -95,7 +90,7 @@ def parse_game(text):
         return None
     game_num = int(match.group(1))
 
-    # Находим левую часть (игрок) до разделителя
+    # Левая часть (игрок) до разделителя
     left_part = text
     if '-' in text:
         left_part = text.split('-')[0].strip()
@@ -104,19 +99,19 @@ def parse_game(text):
     elif '👈👉' in text:
         left_part = text.split('👈👉')[0].strip()
 
-    # Ищем карты в скобках
+    # Карты в скобках
     cards_match = re.search(r'\(([^)]+)\)', left_part)
     if not cards_match:
         return None
 
     cards_text = cards_match.group(1)
 
-    # Разделяем карты (могут быть с пробелами или без)
+    # Разделяем карты (с пробелами или без)
     cards = re.findall(r'([\dAKQJ]+[♥♠♣♦]?)', cards_text)
     if not cards:
         return None
 
-    # Извлекаем масти из карт
+    # Масти
     suits = []
     for card in cards:
         if '♥' in card:
@@ -131,16 +126,11 @@ def parse_game(text):
     if len(suits) == 0:
         return None
 
-    # Проверяем, есть ли в игре победитель (✅)
-    has_winner = '✅' in text
-
     return {
         'num': game_num,
         'first_suit': suits[0],
         'first_two_suits': suits[:2] if len(suits) >= 2 else suits,
-        'all_suits': suits,
-        'has_winner': has_winner,
-        'text': text
+        'all_suits': suits
     }
 
 
@@ -149,32 +139,17 @@ def handle_new_game(update: Update, context: CallbackContext):
     global last_donor
 
     try:
-        # Логируем всё, что приходит
-        logger.info(f"🔥🔥🔥 Получен update. Тип: {type(update)}")
-        if update.channel_post:
-            logger.info(f"📨 Сообщение из канала: {update.channel_post.text[:200]}")
-        else:
-            logger.info(f"⚠️ Не channel_post: {update}")
-            return
-
-        if update.channel_post.chat_id != INPUT_CHANNEL_ID:
-            logger.info(f"⏭️ Чат {update.channel_post.chat_id} не совпадает с INPUT_CHANNEL_ID")
+        if not update.channel_post or update.channel_post.chat_id != INPUT_CHANNEL_ID:
             return
 
         text = update.channel_post.text
         game = parse_game(text)
 
         if not game:
-            logger.info("❌ Не удалось распарсить игру")
             return
 
         game_num = game['num']
-        logger.info(f"✅ Распарсена игра #{game_num}, есть победитель: {game['has_winner']}, первая масть: {game['first_suit']}")
-
-        # Если в игре нет победителя — просто логируем и выходим
-        if not game['has_winner']:
-            logger.info(f"⏭️ Игра #{game_num} без победителя, пропускаем")
-            return
+        logger.info(f"🎯 Игра #{game_num}, первая масть: {game['first_suit']}")
 
         # Если игра нечётная — это донор
         if game_num % 2 == 1:
@@ -184,20 +159,19 @@ def handle_new_game(update: Update, context: CallbackContext):
                 'first_suit': game['first_suit'],
                 'rule': rule
             }
-            logger.info(f"📌 Запомнен донор #{game_num} с мастью {game['first_suit']}, правило: {rule}")
+            logger.info(f"📌 Донор #{game_num} запомнен (масть {game['first_suit']}, правило {rule})")
             return
 
         # Если игра чётная — проверяем, не контроль ли это
         if last_donor and game_num == normalize_game_num(last_donor['num'] + 3):
-            logger.info(f"🔍 Найден контроль #{game_num} для донора #{last_donor['num']}")
+            logger.info(f"🔍 Контроль #{game_num} для донора #{last_donor['num']}")
 
             if last_donor['first_suit'] in game['first_two_suits']:
                 logger.info(f"✅ Масть {last_donor['first_suit']} подтвердилась!")
 
                 target = normalize_game_num(game_num + 1)
                 while target % 2 == 0:
-                    target += 1
-                    target = normalize_game_num(target)
+                    target = normalize_game_num(target + 1)
 
                 target_suit = get_opposite_suit(last_donor['first_suit'], last_donor['rule'])
 
@@ -218,9 +192,8 @@ def handle_new_game(update: Update, context: CallbackContext):
                 )
                 logger.info(f"✅ Прогноз отправлен: #{target} → {target_suit}")
             else:
-                logger.info(f"❌ Масть {last_donor['first_suit']} не подтвердилась в контроле")
+                logger.info(f"❌ Масть {last_donor['first_suit']} не подтвердилась")
 
-            # Сбрасываем донора
             last_donor = None
 
     except Exception as e:
@@ -243,7 +216,6 @@ def stats(update: Update, context: CallbackContext):
     if update.effective_user.id != ADMIN_ID:
         update.message.reply_text("⛔ Доступ запрещён")
         return
-
     if last_donor:
         update.message.reply_text(f"📊 Текущий донор: #{last_donor['num']} масть {last_donor['first_suit']}")
     else:
@@ -252,13 +224,12 @@ def stats(update: Update, context: CallbackContext):
 
 # ==================== ЗАПУСК ====================
 def main():
-    # Сброс вебхука
     try:
         url = f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=True"
-        response = requests.post(url)
-        print(f"✅ Вебхук сброшен: {response.json()}")
-    except Exception as e:
-        print(f"⚠️ Не удалось сбросить вебхук: {e}")
+        requests.post(url)
+        print("✅ Вебхук сброшен")
+    except:
+        pass
 
     updater = Updater(TOKEN, use_context=True)
     dp = updater.dispatcher
@@ -273,10 +244,12 @@ def main():
     print("\n" + "="*60)
     print("🤖 БОТ ЗАПУЩЕН")
     print("="*60)
-    print(f"✅ Игры: 1–{MAX_GAME_NUMBER} (циклически)")
-    print("✅ Донор: нечётная игра, ПЕРВАЯ карта игрока")
+    print("✅ Донор: нечётная игра, первая карта игрока")
     print("✅ Контроль: N+3, первые две карты игрока")
     print("✅ Цель: N+5, противоположная масть")
+    print("✅ Правила по диапазонам:")
+    print("   • 1-9,20-29,40-49... : ♥️↔♣️, ♦️↔♠️")
+    print("   • 10-19,30-39,50-59... : ♥️↔♦️, ♠️↔♣️")
     print("="*60)
 
     updater.start_polling(allowed_updates=['message', 'channel_post', 'edited_channel_post'])
