@@ -5,7 +5,7 @@ import re
 
 # Настройки
 INPUT_CHANNEL_ID = -1003469691743
-OUTPUT_CHANNEL_ID = -1003842401391
+OUTPUT_CHANNEL_ID = -10038424013911
 TOKEN = "5482422004:AAHXLYyZ-qoCsycse1k9Qt6YRi9jmB24B-k"
 
 # Настройка логирования
@@ -15,7 +15,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Хранилище донора (в реальной реализации лучше использовать БД/Redis)
+# Хранилище донора
 _donor_storage = {}
 
 def get_donor(chat_id: int) -> dict or None:
@@ -33,40 +33,52 @@ def norm(num: int) -> int:
     """Нормализует номер игры (если > 1440)."""
     return (num - 1) % 1440 + 1
 
-def get_rule(donor_num: int) -> str:
-    """Определяет правило замены по номеру донора."""
-    normalized_num = (donor_num - 1) % 1440 + 1
-    if 1 <= normalized_num <= 9:
-        return "red_black"  # ♥️↔♣️, ♦️↔♠️
-    elif 10 <= normalized_num <= 19:
-        return "same_color"  # ♥️↔♦️, ♣️↔♠️
-    else:
-        return "red_black"
+def is_in_main_range(num: int) -> bool:
+    """Проверяет, входит ли номер в диапазоны 1-9, 20-29, 40-49, ..., 1440."""
+    # Первый диапазон: 1–9
+    if 1 <= num <= 9:
+        return True
+    # Остальные: числа вида 20+20k до 29+20k
+    if num >= 20:
+        normalized = num % 20
+        return 0 <= normalized <= 9 and num <= 1440
+    return False
+
+def get_opposite_custom(suit: str) -> str:
+    """Кастомное правило: ♥️→♣️, ♦️→♠️, ♠️→♦️, ♣️→♥️."""
+    mapping = {
+        "♥️": "♣️",
+        "♦️": "♠️",
+        "♠️": "♦️",
+        "♣️": "♥️"
+    }
+    return mapping.get(suit, suit)
 
 def get_opposite(suit: str, rule: str) -> str:
     """Возвращает противоположную масть по правилу."""
     opposites = {
         "red_black": {"♥️": "♣️", "♦️": "♠️", "♣️": "♥️", "♠️": "♦️"},
-        "same_color": {"♥️": "♦️", "♦️": "♥️", "♣️": "♠️", "♠️": "♣️"},
+        "custom_rule": {"♥️": "♣️", "♦️": "♠️", "♠️": "♦️", "♣️": "♥️"}
     }
     return opposites[rule][suit]
 
+def get_rule(donor_num: int) -> str:
+    """Определяет правило замены по номеру донора."""
+    normalized_num = norm(donor_num)
+    if is_in_main_range(normalized_num):
+        return "custom_rule"
+    else:
+        return "red_black"
+
 def parse_game(text: str) -> dict or None:
-    """
-    Парсит сообщение вида:
-    #N1071 ✅8 (K♣️8♣️) - 2 (4♦️8♣️)
-    #П1 #T10 #R🔵 #C2_2
-    Возвращает dict с num, first_suit, first_two или None.
-    """
+    """Парсит сообщение вида #N1071 ✅8 (K♣️8♣️) - 2 (4♦️8♣️)."""
     try:
-        # Ищем номер игры
         num_match = re.search(r"#N(\d+)", text)
         if not num_match:
             logger.debug(f"Не найден номер игры в: {text}")
             return None
         num = int(num_match.group(1))
 
-        # Ищем первую карту в первой руке (после первой скобки)
         first_hand = text.split("-")[0]
         suit_match = re.search(r"[A2-9TJQK]([♥️♦️♣️♠️)", first_hand)
         if not suit_match:
@@ -74,7 +86,6 @@ def parse_game(text: str) -> dict or None:
             return None
         first_suit = suit_match.group(1)
 
-        # Первые две масти в первой руке
         two_suits = re.findall(r"[A2-9TJQK]([♥️♦️♣️♠️)", first_hand)
         first_two = [s for s in two_suits[:2]]
 
@@ -103,16 +114,17 @@ async def handle_game(update: Update, context: CallbackContext):
         logger.info(f"Сообщение не из целевого канала: {chat_id}, ожидаем: {INPUT_CHANNEL_ID}")
         return
 
-
     game = parse_game(update.channel_post.text)
     if not game:
         logger.info(f"❌ Не удалось распарсить сообщение: {update.channel_post.text}")
         return
 
     num = game["num"]
-    logger.info(f"📥 Игра {num}, первая масть {game['first_suit']}, message_id={update.channel_post.message_id}")
+    normalized_num = norm(num)
 
-    donor = get_donor(chat_id)  # используем ID чата
+    logger.info(f"📥 Получено: #{num} (нормализовано до {normalized_num}), масти: {game['first_two']}")
+
+    donor = get_donor(chat_id)
 
     # 1. Если нет донора и игра нечётная — запоминаем как донор
     if donor is None and num % 2 == 1:
@@ -121,17 +133,16 @@ async def handle_game(update: Update, context: CallbackContext):
             {
                 "num": num,
                 "suit": game["first_suit"],
-                "checked_n3": False,  # ещё не проверяли N+3
-                "repeated": False,     # пока нет повтора
+                "checked_n3": False,
+                "repeated": False,
             },
         )
-        logger.info("📌 Донор %d запомнен, масть %s", num, game["first_suit"])
+        logger.info(f"📌 Донор #{num} запомнен, масть {game['first_suit']}")
         return
 
     # 2. Если есть донор, проверяем N+3
     if donor and not donor["checked_n3"]:
         if num == donor["num"] + 3:
-            # Проверяем, есть ли масть донора в первых двух картах
             if donor["suit"] in game["first_two"]:
                 donor["repeated"] = True
             donor["checked_n3"] = True
@@ -140,105 +151,43 @@ async def handle_game(update: Update, context: CallbackContext):
     # 3. Если дошли до N+4 и был повтор — выдаём прогноз
     if num == donor["num"] + 4 and donor["repeated"]:
         rule = get_rule(donor["num"])
-        target_suit = get_opposite(donor["suit"], rule)
-        target = norm(num)  # цель: N+4 (уже нормализовано)
+
+        if rule == "custom_rule":
+            target_suit = get_opposite_custom(donor["suit"])
+        else:
+            target_suit = get_opposite(donor["suit"], rule)
+
+        target = norm(num)
 
         msg = (
             f"🎯 ПРОГНОЗ\n"
             f"Игра: #{target}\n"
-            f"Прогноз: {target_suit}"
+            f"Прогноз: {target_suit}\n"
+            f"Правило: {rule}"
         )
         try:
             await context.bot.send_message(chat_id=OUTPUT_CHANNEL_ID, text=msg)
-            logger.info("✅ Прогноз на %d: %s", target, target_suit)
+            logger.info(f"✅ Прогноз на #{target}: {target_suit} (правило: {rule})")
         except Exception as e:
-            logger.error("Ошибка отправки прогноза: %s", e)
+            logger.error(f"Ошибка отправки прогноза: {e}")
 
-    # 4. Сбрасываем донора после обработки N+4
-    if num >= donor["num"] + 4:
-        set_donor(chat_id, None)
-
-async def error_handler(update: object, context: CallbackContext) -> None:
-    """Обработчик ошибок бота."""
-    logger.error("Исключение при обработке обновления %s: %s", update, context.error)
+async def start_command(update: Update, context: CallbackContext):
+    """Обработчик команды /start."""
+    await update.message.reply_text("Бот запущен и готов к работе!")
 
 def main():
     """Основная функция запуска бота."""
     application = Application.builder().token(TOKEN).build()
 
-    # Добавляем обработчик ошибок
-    application.add_error_handler(error_handler)
+    # Обработчики
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_game))
+    # Отладочный обработчик (можно закомментировать в продакшене)
+    application.add_handler(MessageHandler(filters.ALL, debug_handler))
 
-    # Отладочный обработчик (
-
-async def error_handler(update: object, context: CallbackContext) -> None:
-    """Обработчик ошибок бота."""
-    logger.error("Исключение при обработке обновления %s: %s", update, context.error)
-
-def main():
-    """Основная функция запуска бота."""
-    application = Application.builder().token(TOKEN).build()
-
-    # Добавляем обработчик ошибок
-    application.add_error_handler(error_handler)
-
-    # Отладочный обработчик (группа 0 — выполняется первым)
-    application.add_handler(MessageHandler(filters.TEXT, debug_handler), group=0)
-
-    # Основной обработчик сообщений из канала
-    application.add_handler(
-        MessageHandler(
-            filters.TEXT & filters.Chat(INPUT_CHANNEL_ID),
-            handle_game
-        ),
-        group=1
-    )
-
-    # Команда для проверки статуса бота
-    async def status_command(update: Update, context: CallbackContext):
-        chat_id = update.effective_chat.id
-        donor = get_donor(chat_id)
-        if donor:
-            status_msg = (
-                f"🤖 Статус бота:\n"
-                f"Донор: #{donor['num']} ({donor['suit']})\n"
-                f"Проверен N+3: {donor['checked_n3']}\n"
-                f"Был повтор: {donor['repeated']}"
-            )
-        else:
-            status_msg = "🤖 Статус бота: донор не установлен"
-        await update.message.reply_text(status_msg)
-
-    application.add_handler(CommandHandler("status", status_command))
-
-    # Команда для сброса донора
-    async def reset_command(update: Update, context: CallbackContext):
-        chat_id = update.effective_chat.id
-        set_donor(chat_id, None)
-        await update.message.reply_text("🔄 Донор сброшен")
-
-    application.add_handler(CommandHandler("reset", reset_command))
-
-    logger.info("Бот запущен. Ожидание сообщений...")
-
-    try:
-        application.run_polling()
-    except Exception as e:
-        logger.critical("Критическая ошибка при запуске бота: %s", e)
+    # Запуск бота
+    logger.info("Бот запущен...")
+    application.run_polling()
 
 if __name__ == "__main__":
-    # Дополнительная проверка ID каналов перед запуском
-    print("=" * 50)
-    print("ЗАПУСК БОТА")
-    print(f"Входной канал ID: {INPUT_CHANNEL_ID}")
-    print(f"Выходной канал ID: {OUTPUT_CHANNEL_ID}")
-    print(f"Токен: {TOKEN[:10]}...{TOKEN[-5:]}")  # Показываем только начало и конец токена
-    print("=" * 50)
-
-    # Проверка корректности ID каналов
-    if abs(INPUT_CHANNEL_ID) < 10**12 or abs(INPUT_CHANNEL_ID) > 10**14:
-        logger.warning("⚠️ Внимание: длина INPUT_CHANNEL_ID кажется нестандартной")
-    if abs(OUTPUT_CHANNEL_ID) < 10**12 or abs(OUTPUT_CHANNEL_ID) > 10**14:
-        logger.warning("⚠️ Внимание: длина OUTPUT_CHANNEL_ID кажется нестандартной")
-
     main()
