@@ -1,17 +1,17 @@
 import logging
+import re
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, CallbackContext
-import re
 
 # Настройки
-INPUT_CHANNEL_ID = -1003469691743
-OUTPUT_CHANNEL_ID = -1003842401391
+INPUT_CHANNEL_ID = -1003469691743  # ID входного канала
+OUTPUT_CHANNEL_ID = -1003842401391  # ID выходного канала
 TOKEN = "5482422004:AAHXLYyZ-qoCsycse1k9Qt6YRi9jmB24B-k"
 
 # Настройка логирования
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
+    level=logging.DEBUG
 )
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,9 @@ def set_donor(chat_id: int, donor: dict or None):
 
 def norm(num: int) -> int:
     """Нормализует номер игры (если > 1440)."""
-    return (num - 1) % 1440 + 1
+    normalized = (num - 1) % 1440 + 1
+    logger.debug(f"Нормализация: {num} → {normalized}")
+    return normalized
 
 def is_in_main_range(num: int) -> bool:
     """Проверяет, входит ли номер в диапазоны 1-9, 20-29, 40-49, ..., 1440."""
@@ -52,7 +54,9 @@ def get_opposite_custom(suit: str) -> str:
         "♠️": "♦️",
         "♣️": "♥️"
     }
-    return mapping.get(suit, suit)
+    result = mapping.get(suit, suit)
+    logger.debug(f"Кастомное правило: {suit} → {result}")
+    return result
 
 def get_opposite(suit: str, rule: str) -> str:
     """Возвращает противоположную масть по правилу."""
@@ -60,116 +64,64 @@ def get_opposite(suit: str, rule: str) -> str:
         "red_black": {"♥️": "♣️", "♦️": "♠️", "♣️": "♥️", "♠️": "♦️"},
         "custom_rule": {"♥️": "♣️", "♦️": "♠️", "♠️": "♦️", "♣️": "♥️"}
     }
-    return opposites[rule][suit]
+    result = opposites[rule][suit]
+    logger.debug(f"Правило {rule}: {suit} → {result}")
+    return result
 
 def get_rule(donor_num: int) -> str:
     """Определяет правило замены по номеру донора."""
     normalized_num = norm(donor_num)
-    if is_in_main_range(normalized_num):
-        return "custom_rule"
+    in_range = is_in_main_range(normalized_num)
+    rule = "custom_rule" if in_range else "red_black"
+    logger.debug(f"Номер {donor_num} (нормализовано: {normalized_num}) → в диапазоне: {in_range} → правило: {rule}")
+    return rule
+
+def parse_baccarat_message(text: str) -> dict or None:
+    """Парсит сообщение с игрой Baccarat."""
+    logger.debug(f"Парсинг сообщения: {text}")
+
+    # Улучшенный шаблон для парсинга всех вариантов сообщений
+    pattern = r'#N(\d+)\.\s*(\d+)\([^)]*\)(?:\s*🔰\s*\d+\([^)]*\))?\s*-?\s*✅?(\d+)\([^)]*\)\s*#T(\d+)'
+    match = re.search(pattern, text)
+
+    if match:
+        game_data = {
+            'number': int(match.group(1)),
+            'player_score': match.group(2),
+            'bankerscore': match.group(3),
+            'table': match.group(4)
+        }
+        logger.info(f"Игра распознана: {game_data}")
+        return game_data
     else:
-        return "red_black"
-
-def parse_game(text: str) -> dict or None:
-    """Парсит сообщение вида #N1071 ✅8 (K♣️8♣️) - 2 (4♦️8♣️)."""
-    try:
-        num_match = re.search(r"#N(\d+)", text)
-        if not num_match:
-            logger.debug(f"Не найден номер игры в: {text}")
-            return None
-        num = int(num_match.group(1))
-
-        first_hand = text.split("-")[0]
-        suit_match = re.search(r"[A2-9TJQK]([♥️♦️♣️♠️)", first_hand)
-        if not suit_match:
-            logger.debug(f"Не найдена первая масть в: {first_hand}")
-            return None
-        first_suit = suit_match.group(1)
-
-        two_suits = re.findall(r"[A2-9TJQK]([♥️♦️♣️♠️)", first_hand)
-        first_two = [s for s in two_suits[:2]]
-
-        return {"num": num, "first_suit": first_suit, "first_two": first_two}
-    except Exception as e:
-        logger.error(f"Ошибка парсинга: {e}, текст: {text}")
+        logger.warning(f"Сообщение не соответствует формату игры: {text}")
         return None
 
-async def debug_handler(update: Update, context: CallbackContext):
-    """Отладочный обработчик — показывает все входящие сообщения."""
-    if update.channel_post:
-        chat_id = update.channel_post.chat_id
-        text = update.channel_post.text
-        logger.info(f"[DEBUG] Получено сообщение из канала {chat_id}: {text}")
-
 async def handle_game(update: Update, context: CallbackContext):
-    """Основной обработчик сообщений из канала."""
-    if not update.channel_post:
-        logger.info("Не канал, пропускаем")
+    """Обрабатывает сообщения с играми."""
+    # Проверяем, что сообщение из нужного канала
+    if update.message.chat_id != INPUT_CHANNEL_ID:
         return
 
-    chat_id = update.channel_post.chat_id
-    logger.info(f"Получено сообщение из чата: {chat_id}")
+    text = update.message.text
+    game_data = parse_baccarat_message(text)
 
-    if chat_id != INPUT_CHANNEL_ID:
-        logger.info(f"Сообщение не из целевого канала: {chat_id}, ожидаем: {INPUT_CHANNEL_ID}")
-        return
+    if game_data:
+        # Сохраняем как донора, если это первая игра
+        if not get_donor(update.message.chat_id):
+            set_donor(update.message.chat_id, game_data)
+            logger.info(f"Установлен донор: игра #{game_data['number']}")
 
-    game = parse_game(update.channel_post.text)
-    if not game:
-        logger.info(f"❌ Не удалось распарсить сообщение: {update.channel_post.text}")
-        return
+        # Здесь ваша логика обработки игры
+        # Например, отправка в выходной канал
+        output_message = f"Распознана игра #{game_data['number']}: Player {game_data['playerscore']} - Banker {game_data['bankerscore']} (Table {game_data['table']})"
+        await context.bot.send_message(chat_id=OUTPUT_CHANNEL_ID, text=output_message)
 
-    num = game["num"]
-    normalized_num = norm(num)
-
-    logger.info(f"📥 Получено: #{num} (нормализовано до {normalized_num}), масти: {game['first_two']}")
-
-    donor = get_donor(chat_id)
-
-    # 1. Если нет донора и игра нечётная — запоминаем как донор
-    if donor is None and num % 2 == 1:
-        set_donor(
-            chat_id,
-            {
-                "num": num,
-                "suit": game["first_suit"],
-                "checked_n3": False,
-                "repeated": False,
-            },
-        )
-        logger.info(f"📌 Донор #{num} запомнен, масть {game['first_suit']}")
-        return
-
-    # 2. Если есть донор, проверяем N+3
-    if donor and not donor["checked_n3"]:
-        if num == donor["num"] + 3:
-            if donor["suit"] in game["first_two"]:
-                donor["repeated"] = True
-            donor["checked_n3"] = True
-            set_donor(chat_id, donor)
-
-    # 3. Если дошли до N+4 и был повтор — выдаём прогноз
-    if num == donor["num"] + 4 and donor["repeated"]:
-        rule = get_rule(donor["num"])
-
-        if rule == "custom_rule":
-            target_suit = get_opposite_custom(donor["suit"])
-        else:
-            target_suit = get_opposite(donor["suit"], rule)
-
-        target = norm(num)
-
-        msg = (
-            f"🎯 ПРОГНОЗ\n"
-            f"Игра: #{target}\n"
-            f"Прогноз: {target_suit}\n"
-            f"Правило: {rule}"
-        )
-        try:
-            await context.bot.send_message(chat_id=OUTPUT_CHANNEL_ID, text=msg)
-            logger.info(f"✅ Прогноз на #{target}: {target_suit} (правило: {rule})")
-        except Exception as e:
-            logger.error(f"Ошибка отправки прогноза: {e}")
+async def debug_handler(update: Update, context: CallbackContext):
+    """Отладочный обработчик — показывает все получаемые сообщения."""
+    message_text = update.message.text
+    chat_id = update.message.chat_id
+    logger.info(f"Получено сообщение из чата {chat_id}: {message_text}")
 
 async def start_command(update: Update, context: CallbackContext):
     """Обработчик команды /start."""
@@ -177,17 +129,25 @@ async def start_command(update: Update, context: CallbackContext):
 
 def main():
     """Основная функция запуска бота."""
-    application = Application.builder().token(TOKEN).build()
+    try:
+        application = Application.builder().token(TOKEN).build()
 
-    # Обработчики
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_game))
-    # Отладочный обработчик (можно закомментировать в продакшене)
-    application.add_handler(MessageHandler(filters.ALL, debug_handler))
+        # Обработчики
+        application.add_handler(CommandHandler("start", start_command))
+        # Сначала отладочный обработчик (можно закомментировать после отладки)
+        application.add_handler(MessageHandler(filters.TEXT, debug_handler))
+        # Основной обработчик игр
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_game))
 
-    # Запуск бота
-    logger.info("Бот запущен...")
-    application.run_polling()
+        logger.info("Бот запускается...")
+        application.run_polling()
+    except Exception as e:
+        if "Conflict" in str(e):
+            logger.error("❌ Ошибка конфликта: уже запущен другой экземпляр бота!")
+            logger.error("Убедитесь, что только один экземпляр запущен.")
+        else:
+            logger.error(f"Неизвестная ошибка: {e}")
+
 
 if __name__ == "__main__":
     main()
