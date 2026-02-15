@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 import logging
 import re
-import asyncio
 import time
-import signal
 import sys
+import signal
 from datetime import datetime
 from collections import defaultdict
 from telegram import Update
-from telegram.ext import Updater, MessageHandler, filters, CallbackContext
+from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from telegram.error import Conflict
 
 # === НАСТРОЙКИ ===
 TOKEN = "1163348874:AAFgZEXveILvD4MbhQ8jiLTwIxs4puYhmq0"
@@ -189,7 +189,7 @@ def print_update(pred_id, pred):
     next_game = pred['check_games'][pred['attempt']]
     logger.info(f"🔄 Прогноз #{pred_id} переходит к догону {pred['attempt']}, следующая игра: #{next_game}")
 
-def handle_message(update: Update, context: CallbackContext):
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает входящие сообщения"""
     try:
         if not update.channel_post:
@@ -267,19 +267,17 @@ def handle_message(update: Update, context: CallbackContext):
     except Exception as e:
         logger.error(f"❌ Ошибка в handle_message: {e}")
 
-def error_callback(update, context):
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает ошибки"""
     try:
-        if "Conflict" in str(context.error):
+        if isinstance(context.error, Conflict):
             logger.warning("⚠️ Обнаружен конфликт с другим экземпляром бота")
-            # Останавливаем текущий экземпляр
-            if hasattr(context, 'dispatcher'):
-                context.dispatcher.stop()
+            # Выходим с кодом ошибки
             sys.exit(1)
         else:
             logger.error(f"❌ Ошибка: {context.error}")
     except Exception as e:
-        logger.error(f"❌ Ошибка в error_callback: {e}")
+        logger.error(f"❌ Ошибка в error_handler: {e}")
 
 def signal_handler(signum, frame):
     """Обработчик сигналов для graceful shutdown"""
@@ -307,24 +305,23 @@ def main():
     retry_count = 0
     
     while retry_count < max_retries:
-        updater = None
+        application = None
         try:
-            # Создаем Updater
-            updater = Updater(token=TOKEN, use_context=True)
+            # Создаем Application
+            application = Application.builder().token(TOKEN).build()
             
             # Добавляем обработчик ошибок
-            updater.dispatcher.add_error_handler(error_callback)
+            application.add_error_handler(error_handler)
             
             # Добавляем обработчик сообщений
-            updater.dispatcher.add_handler(MessageHandler(
+            application.add_handler(MessageHandler(
                 filters.Chat(INPUT_CHANNEL_ID) & filters.TEXT,
                 handle_message
             ))
             
             # Запускаем бота
             logger.info("🚀 Запуск бота...")
-            updater.start_polling(drop_pending_updates=True)
-            updater.idle()
+            application.run_polling(drop_pending_updates=True)
             break
             
         except Exception as e:
@@ -340,9 +337,9 @@ def main():
                 logger.error(f"❌ Критическая ошибка: {e}")
                 sys.exit(1)
         finally:
-            if updater:
+            if application:
                 try:
-                    updater.stop()
+                    application.stop()
                 except:
                     pass
 
