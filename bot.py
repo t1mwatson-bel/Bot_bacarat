@@ -7,10 +7,10 @@ from telegram import Update
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 
 # ==================== НАСТРОЙКИ (только из env) ====================
-TOKEN = os.getenv("TOKEN")
-INPUT_CHANNEL_ID = os.getenv("INPUT_CHANNEL_ID")
-OUTPUT_CHANNEL_ID = os.getenv("OUTPUT_CHANNEL_ID")
-ADMIN_ID = os.getenv("ADMIN_ID")
+TOKEN = os.getenv("5482422004:AAHXLYyZ-qoCsycse1k9Qt6YRi9jmB24B-k")
+INPUT_CHANNEL_ID = os.getenv("-1003469691743")
+OUTPUT_CHANNEL_ID = os.getenv("-1003855079501")
+ADMIN_ID = os.getenv("683219603")
 
 # Проверка обязательных переменных
 if not TOKEN:
