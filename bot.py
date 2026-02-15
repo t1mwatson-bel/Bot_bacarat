@@ -4,13 +4,14 @@ import re
 from telegram import Update
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 import os
-import requests  # для сброса вебхука
+import requests
 
 # ==================== НАСТРОЙКИ ====================
-TOKEN = os.getenv("TOKEN", "5482422004:AAHXLYyZ-qoCsycse1k9Qt6YRi9jmB24B-k")
+TOKEN = os.getenv("TOKEN", "1163348874:AAFgZEXveILvD4MbhQ8jiLTwIxs4puYhmq0")
 INPUT_CHANNEL_ID = int(os.getenv("INPUT_CHANNEL_ID", "-1003469691743"))
 OUTPUT_CHANNEL_ID = int(os.getenv("OUTPUT_CHANNEL_ID", "-1003842401391"))
 ADMIN_ID = int(os.getenv("ADMIN_ID", "683219603"))
+MAX_GAME_NUMBER = 1440
 
 # ==================== ЛОГИРОВАНИЕ ====================
 logging.basicConfig(
@@ -20,60 +21,194 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ==================== ХРАНИЛИЩЕ ИГР ====================
-last_donor = None  # {'num': int, 'first_suit': str, 'range_type': str}
+last_donor = None  # {'num': int, 'first_suit': str}
 
 
-# ==================== РАБОЧИЕ ДИАПАЗОНЫ ====================
-def is_working_range(game_num):
+# ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
+def normalize_game_num(num):
+    """Приводит номер игры к диапазону 1–1440 (циклически)."""
+    while num > MAX_GAME_NUMBER:
+        num -= MAX_GAME_NUMBER
+    while num < 1:
+        num += MAX_GAME_NUMBER
+    return num
+
+
+def get_rule_for_game(game_num):
     """
-    Проверяет, входит ли игра в рабочие диапазоны.
-    Диапазоны: 1-9, 30-39, 60-69, 90-99, 120-129, 150-159, 180-189, 210-219, ...
+    Возвращает правило для игры в зависимости от её номера.
+    Правила:
+    - 'red_black'  : красная ↔ чёрная  (♥️↔♣️, ♦️↔♠️)
+    - 'same_color' : красная ↔ красная (♥️↔♦️), чёрная ↔ чёрная (♠️↔♣️)
     """
-    # Остаток от деления на 30 определяет блок
-    remainder = game_num % 30
-    if remainder == 0:
-        # Игры типа 30, 60, 90... — последние в диапазоне, проверяем отдельно
-        return (game_num // 30) % 2 == 1  # нечётные блоки: 30, 90, 150...
+    # Определяем диапазон (десятки)
+    decade = (game_num // 10) * 10
     
-    # Для остальных проверяем, попадают ли они в первые 9 игр блока
-    block_start = (game_num // 30) * 30
-    if block_start == 0:
-        # Особый случай для 1-9
-        return 1 <= game_num <= 9
-    else:
-        # Для блоков 30-39, 60-69 и т.д.
-        return block_start + 1 <= game_num <= block_start + 9
-
-
-def get_range_type(game_num):
-    """
-    Определяет тип диапазона по номеру игры.
-    type1: 1-9, 30-39, 60-69, 90-99, 120-129... (правило ♥️↔♣️, ♦️↔♠️)
-    type2: 10-19, 40-49, 70-79, 100-109, 130-139... (правило красная↔красная, чёрная↔чёрная)
-    """
-    if not is_working_range(game_num):
-        return None
+    # Для последнего десятка (1430–1440) обрабатываем отдельно
+    if game_num > 1430:
+        # 1430–1439 — по аналогии с 30–39 (same_color)
+        # 1440 — как 40 (red_black)
+        if 1430 <= game_num <= 1439:
+            return 'same_color'
+        elif game_num == 1440:
+            return 'red_black'
     
-    # Определяем блок
-    if game_num <= 9:
-        return 'type1'
+    # Таблица соответствия диапазонов и правил
+    rule_map = {
+        0: 'red_black',    # 1-9
+        10: 'same_color',  # 10-19
+        20: 'red_black',   # 20-29
+        30: 'same_color',  # 30-39
+        40: 'red_black',   # 40-49
+        50: 'same_color',  # 50-59
+        60: 'red_black',   # 60-69
+        70: 'same_color',  # 70-79
+        80: 'red_black',   # 80-89
+        90: 'same_color',  # 90-99
+        100: 'red_black',  # 100-109
+        110: 'same_color', # 110-119
+        120: 'red_black',  # 120-129
+        130: 'same_color', # 130-139
+        140: 'red_black',  # 140-149
+        150: 'same_color', # 150-159
+        160: 'red_black',  # 160-169
+        170: 'same_color', # 170-179
+        180: 'red_black',  # 180-189
+        190: 'same_color', # 190-199
+        200: 'red_black',  # 200-209
+        210: 'same_color', # 210-219
+        220: 'red_black',  # 220-229
+        230: 'same_color', # 230-239
+        240: 'red_black',  # 240-249
+        250: 'same_color', # 250-259
+        260: 'red_black',  # 260-269
+        270: 'same_color', # 270-279
+        280: 'red_black',  # 280-289
+        290: 'same_color', # 290-299
+        300: 'red_black',  # 300-309
+        310: 'same_color', # 310-319
+        320: 'red_black',  # 320-329
+        330: 'same_color', # 330-339
+        340: 'red_black',  # 340-349
+        350: 'same_color', # 350-359
+        360: 'red_black',  # 360-369
+        370: 'same_color', # 370-379
+        380: 'red_black',  # 380-389
+        390: 'same_color', # 390-399
+        400: 'red_black',  # 400-409
+        410: 'same_color', # 410-419
+        420: 'red_black',  # 420-429
+        430: 'same_color', # 430-439
+        440: 'red_black',  # 440-449
+        450: 'same_color', # 450-459
+        460: 'red_black',  # 460-469
+        470: 'same_color', # 470-479
+        480: 'red_black',  # 480-489
+        490: 'same_color', # 490-499
+        500: 'red_black',  # 500-509
+        510: 'same_color', # 510-519
+        520: 'red_black',  # 520-529
+        530: 'same_color', # 530-539
+        540: 'red_black',  # 540-549
+        550: 'same_color', # 550-559
+        560: 'red_black',  # 560-569
+        570: 'same_color', # 570-579
+        580: 'red_black',  # 580-589
+        590: 'same_color', # 590-599
+        600: 'red_black',  # 600-609
+        610: 'same_color', # 610-619
+        620: 'red_black',  # 620-629
+        630: 'same_color', # 630-639
+        640: 'red_black',  # 640-649
+        650: 'same_color', # 650-659
+        660: 'red_black',  # 660-669
+        670: 'same_color', # 670-679
+        680: 'red_black',  # 680-689
+        690: 'same_color', # 690-699
+        700: 'red_black',  # 700-709
+        710: 'same_color', # 710-719
+        720: 'red_black',  # 720-729
+        730: 'same_color', # 730-739
+        740: 'red_black',  # 740-749
+        750: 'same_color', # 750-759
+        760: 'red_black',  # 760-769
+        770: 'same_color', # 770-779
+        780: 'red_black',  # 780-789
+        790: 'same_color', # 790-799
+        800: 'red_black',  # 800-809
+        810: 'same_color', # 810-819
+        820: 'red_black',  # 820-829
+        830: 'same_color', # 830-839
+        840: 'red_black',  # 840-849
+        850: 'same_color', # 850-859
+        860: 'red_black',  # 860-869
+        870: 'same_color', # 870-879
+        880: 'red_black',  # 880-889
+        890: 'same_color', # 890-899
+        900: 'red_black',  # 900-909
+        910: 'same_color', # 910-919
+        920: 'red_black',  # 920-929
+        930: 'same_color', # 930-939
+        940: 'red_black',  # 940-949
+        950: 'same_color', # 950-959
+        960: 'red_black',  # 960-969
+        970: 'same_color', # 970-979
+        980: 'red_black',  # 980-989
+        990: 'same_color', # 990-999
+        1000: 'red_black', # 1000-1009
+        1010: 'same_color', # 1010-1019
+        1020: 'red_black', # 1020-1029
+        1030: 'same_color', # 1030-1039
+        1040: 'red_black', # 1040-1049
+        1050: 'same_color', # 1050-1059
+        1060: 'red_black', # 1060-1069
+        1070: 'same_color', # 1070-1079
+        1080: 'red_black', # 1080-1089
+        1090: 'same_color', # 1090-1099
+        1100: 'red_black', # 1100-1109
+        1110: 'same_color', # 1110-1119
+        1120: 'red_black', # 1120-1129
+        1130: 'same_color', # 1130-1139
+        1140: 'red_black', # 1140-1149
+        1150: 'same_color', # 1150-1159
+        1160: 'red_black', # 1160-1169
+        1170: 'same_color', # 1170-1179
+        1180: 'red_black', # 1180-1189
+        1190: 'same_color', # 1190-1199
+        1200: 'red_black', # 1200-1209
+        1210: 'same_color', # 1210-1219
+        1220: 'red_black', # 1220-1229
+        1230: 'same_color', # 1230-1239
+        1240: 'red_black', # 1240-1249
+        1250: 'same_color', # 1250-1259
+        1260: 'red_black', # 1260-1269
+        1270: 'same_color', # 1270-1279
+        1280: 'red_black', # 1280-1289
+        1290: 'same_color', # 1290-1299
+        1300: 'red_black', # 1300-1309
+        1310: 'same_color', # 1310-1319
+        1320: 'red_black', # 1320-1329
+        1330: 'same_color', # 1330-1339
+        1340: 'red_black', # 1340-1349
+        1350: 'same_color', # 1350-1359
+        1360: 'red_black', # 1360-1369
+        1370: 'same_color', # 1370-1379
+        1380: 'red_black', # 1380-1389
+        1390: 'same_color', # 1390-1399
+        1400: 'red_black', # 1400-1409
+        1410: 'same_color', # 1410-1419
+        1420: 'red_black', # 1420-1429
+    }
     
-    block_start = (game_num // 30) * 30
-    if block_start in (30, 60, 90, 120, 150, 180, 210):
-        # Для блоков 30-39, 60-69, 90-99, 120-129, 150-159, 180-189, 210-219
-        if game_num <= block_start + 9:
-            return 'type1'
-    
-    # Если не подошло под type1, значит type2
-    return 'type2'
+    return rule_map.get(decade, None)
 
 
-def get_opposite_suit(suit, range_type):
+def get_opposite_suit(suit, rule):
     """
-    Возвращает противоположную масть по правилам диапазона.
+    Возвращает противоположную масть по правилу.
     """
-    if range_type == 'type1':
-        # Правило: ♥️↔♣️, ♦️↔♠️
+    if rule == 'red_black':
+        # красная ↔ чёрная: ♥️↔♣️, ♦️↔♠️
         if suit == '♥️':
             return '♣️'
         elif suit == '♣️':
@@ -82,8 +217,9 @@ def get_opposite_suit(suit, range_type):
             return '♠️'
         elif suit == '♠️':
             return '♦️'
-    elif range_type == 'type2':
-        # Правило: красная↔красная, чёрная↔чёрная
+    elif rule == 'same_color':
+        # красная ↔ красная: ♥️↔♦️
+        # чёрная ↔ чёрная: ♠️↔♣️
         if suit == '♥️':
             return '♦️'
         elif suit == '♦️':
@@ -92,7 +228,7 @@ def get_opposite_suit(suit, range_type):
             return '♣️'
         elif suit == '♣️':
             return '♠️'
-    return suit  # на всякий случай
+    return suit
 
 
 # ==================== ПАРСИНГ ИГРЫ ====================
@@ -102,7 +238,6 @@ def parse_game(text):
     - номер игры
     - первую карту игрока (левую руку)
     - первые две карты игрока (для контроля)
-    Возвращает словарь или None, если не удалось распарсить.
     """
     if not text or '✅' not in text:
         return None
@@ -171,60 +306,63 @@ def handle_new_game(update: Update, context: CallbackContext):
         game_num = game['num']
         logger.info(f"✅ Распарсена игра #{game_num}, масти: {game['first_two_suits']}")
         
-        # Проверяем, входит ли игра в рабочий диапазон
-        if not is_working_range(game_num):
-            logger.info(f"⏭️ Игра #{game_num} вне рабочего диапазона")
-            return
-        
         # Если игра нечётная — это потенциальный донор
         if game_num % 2 == 1:
             # Сохраняем как донора
-            last_donor = {
-                'num': game_num,
-                'first_suit': game['first_suit'],
-                'range_type': get_range_type(game_num)
-            }
-            logger.info(f"📌 Запомнен донор #{game_num} с мастью {game['first_suit']}")
+            rule = get_rule_for_game(game_num)
+            if rule:
+                last_donor = {
+                    'num': game_num,
+                    'first_suit': game['first_suit'],
+                    'rule': rule
+                }
+                logger.info(f"📌 Запомнен донор #{game_num} с мастью {game['first_suit']}, правило: {rule}")
+            else:
+                logger.info(f"⏭️ Донор #{game_num} вне рабочего диапазона")
+                last_donor = None
             return
         
         # Если игра чётная и у нас есть донор — проверяем, не контрольная ли это
-        if last_donor and game_num == last_donor['num'] + 3:
-            logger.info(f"🔍 Найден контроль #{game_num} для донора #{last_donor['num']}")
-            
-            # Проверяем, есть ли масть донора в первых двух картах игрока
-            if last_donor['first_suit'] in game['first_two_suits']:
-                logger.info(f"✅ Масть {last_donor['first_suit']} подтвердилась!")
+        if last_donor and last_donor['rule']:
+            expected_control = normalize_game_num(last_donor['num'] + 3)
+            if game_num == expected_control:
+                logger.info(f"🔍 Найден контроль #{game_num} для донора #{last_donor['num']}")
                 
-                # Определяем целевую игру (следующая нечётная после контроля)
-                target = game_num + 1
-                while target % 2 == 0:
-                    target += 1
+                # Проверяем, есть ли масть донора в первых двух картах игрока
+                if last_donor['first_suit'] in game['first_two_suits']:
+                    logger.info(f"✅ Масть {last_donor['first_suit']} подтвердилась!")
+                    
+                    # Определяем целевую игру (следующая нечётная после контроля)
+                    target = game_num + 1
+                    while target % 2 == 0:
+                        target += 1
+                    target = normalize_game_num(target)
+                    
+                    # Определяем противоположную масть по правилу донора
+                    target_suit = get_opposite_suit(last_donor['first_suit'], last_donor['rule'])
+                    
+                    # Отправляем прогноз
+                    msg = (
+                        f"🎯 *ПРОГНОЗ*\n"
+                        f"━━━━━━━━━━━━━━━\n\n"
+                        f"📌 Донор: #{last_donor['num']} (масть {last_donor['first_suit']})\n"
+                        f"✅ Контроль: #{game_num} (подтверждено)\n"
+                        f"🎯 Цель: #{target}\n"
+                        f"🃏 Ставка: масть {target_suit}\n\n"
+                        f"⚡️ Ждём у игрока слева"
+                    )
+                    
+                    context.bot.send_message(
+                        chat_id=OUTPUT_CHANNEL_ID,
+                        text=msg,
+                        parse_mode='Markdown'
+                    )
+                    logger.info(f"✅ Прогноз отправлен: #{target} → {target_suit}")
+                else:
+                    logger.info(f"❌ Масть {last_donor['first_suit']} не подтвердилась")
                 
-                # Определяем противоположную масть
-                target_suit = get_opposite_suit(last_donor['first_suit'], last_donor['range_type'])
-                
-                # Отправляем прогноз
-                msg = (
-                    f"🎯 *ПРОГНОЗ*\n"
-                    f"━━━━━━━━━━━━━━━\n\n"
-                    f"📌 Донор: #{last_donor['num']} (масть {last_donor['first_suit']})\n"
-                    f"✅ Контроль: #{game_num} (подтверждено)\n"
-                    f"🎯 Цель: #{target}\n"
-                    f"🃏 Ставка: масть {target_suit}\n\n"
-                    f"⚡️ Ждём у игрока слева"
-                )
-                
-                context.bot.send_message(
-                    chat_id=OUTPUT_CHANNEL_ID,
-                    text=msg,
-                    parse_mode='Markdown'
-                )
-                logger.info(f"✅ Прогноз отправлен: #{target} → {target_suit}")
-            else:
-                logger.info(f"❌ Масть {last_donor['first_suit']} не подтвердилась")
-            
-            # В любом случае сбрасываем донора
-            last_donor = None
+                # В любом случае сбрасываем донора
+                last_donor = None
         
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}")
@@ -237,8 +375,11 @@ def start(update: Update, context: CallbackContext):
         return
     update.message.reply_text(
         "✅ *Бот прогнозов запущен*\n"
-        "Рабочие диапазоны: 1-9, 30-39, 60-69, 90-99, 120-129...\n"
-        "Логика: донор (нечётная) → контроль N+3 → цель N+5"
+        f"Игры: 1–{MAX_GAME_NUMBER} (циклически)\n"
+        "Логика: донор (нечётная) → контроль N+3 → цель N+5\n"
+        "Правила смены мастей по диапазонам:\n"
+        "• 1-9,20-29,40-49... : красная↔чёрная (♥️↔♣️, ♦️↔♠️)\n"
+        "• 10-19,30-39,50-59... : красная↔красная (♥️↔♦️), чёрная↔чёрная (♠️↔♣️)"
     )
 
 
@@ -246,19 +387,22 @@ def stats(update: Update, context: CallbackContext):
     if update.effective_user.id != ADMIN_ID:
         update.message.reply_text("⛔ Доступ запрещён")
         return
-    update.message.reply_text(f"📊 Текущий донор: {last_donor}")
+    
+    if last_donor:
+        update.message.reply_text(f"📊 Текущий донор: #{last_donor['num']} масть {last_donor['first_suit']}")
+    else:
+        update.message.reply_text("📊 Нет активного донора")
 
 
 # ==================== ЗАПУСК ====================
 def main():
-    # === СБРОС ВЕБХУКА ===
+    # Сброс вебхука
     try:
         url = f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=True"
         response = requests.post(url)
         print(f"✅ Вебхук сброшен: {response.json()}")
     except Exception as e:
         print(f"⚠️ Не удалось сбросить вебхук: {e}")
-    # ======================
 
     updater = Updater(TOKEN, use_context=True)
     dp = updater.dispatcher
@@ -273,10 +417,13 @@ def main():
     print("\n" + "="*60)
     print("🤖 БОТ ЗАПУЩЕН")
     print("="*60)
-    print("✅ Рабочие диапазоны: 1-9, 30-39, 60-69, 90-99, 120-129...")
+    print(f"✅ Игры: 1–{MAX_GAME_NUMBER} (циклически)")
     print("✅ Донор: нечётная игра, первая карта игрока")
     print("✅ Контроль: N+3, первые две карты игрока")
     print("✅ Цель: N+5, противоположная масть")
+    print("✅ Правила по диапазонам:")
+    print("   • 1-9,20-29,40-49... : красная↔чёрная (♥️↔♣️, ♦️↔♠️)")
+    print("   • 10-19,30-39,50-59... : красная↔красная (♥️↔♦️), чёрная↔чёрная (♠️↔♣️)")
     print("="*60)
     
     updater.start_polling()
