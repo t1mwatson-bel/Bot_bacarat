@@ -120,10 +120,9 @@ async def handle_game(update: Update, context: CallbackContext):
         target = norm(num)  # цель: N+4 (уже нормализовано)
 
         msg = (
-            f"🎯 ПРОГНОЗ\n"
-            f"Донор: #{donor['num']} ({donor['suit']})\n"
-            f"Цель: #{target}\n"
-            f"Ставка: {target_suit}"
+    f"🎯 ПРОГНОЗ\n"
+    f"Игра: #{target}\n"
+    f"Прогноз: {target_suit}"
         )
         await context.bot.send_message(chat_id=OUTPUT_CHANNEL_ID, text=msg)
         logger.info("✅ Прогноз на %d: %s", target, target_suit)
