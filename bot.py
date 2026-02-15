@@ -144,6 +144,7 @@ def handle_new_game(update: Update, context: CallbackContext):
     global last_donor
 
     try:
+        logger.info(f"🔥🔥🔥 ВООБЩЕ ЛЮБОЙ update: {update}")
         # 🔥 ТЕСТОВЫЙ ЛОГ — сразу видно, доходит ли сообщение
         logger.info(f"🔥🔥🔥 Получен update: {update}")
         if update.channel_post:
