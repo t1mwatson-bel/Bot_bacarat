@@ -2,12 +2,13 @@
 import logging
 import re
 import asyncio
+import time
+import signal
+import sys
 from datetime import datetime
 from collections import defaultdict
 from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
-from telegram.error import Conflict
-import time
+from telegram.ext import Updater, MessageHandler, filters, CallbackContext
 
 # === НАСТРОЙКИ ===
 TOKEN = "1163348874:AAFgZEXveILvD4MbhQ8jiLTwIxs4puYhmq0"
@@ -146,7 +147,7 @@ def check_pattern(game_num, current_suit):
     
     return None
 
-async def check_predictions(game_num, game_data):
+def check_predictions(game_num, game_data):
     """Проверяет активные прогнозы"""
     for pred_id, pred in list(storage.predictions.items()):
         if pred['status'] != 'pending':
@@ -161,21 +162,20 @@ async def check_predictions(game_num, game_data):
                     logger.info(f"✅ Прогноз #{pred_id} выиграл в игре #{game_num}")
                     pred['status'] = 'win'
                     storage.stats['wins'] += 1
-                    await send_result(pred_id, 'win', game_num, pred)
+                    print_result(pred_id, 'win', game_num, pred)
                 else:
                     logger.info(f"❌ Прогноз #{pred_id} не выиграл в игре #{game_num}")
                     
                     if pred['attempt'] >= len(pred['check_games']) - 1:
                         pred['status'] = 'loss'
                         storage.stats['losses'] += 1
-                        await send_result(pred_id, 'loss', game_num, pred)
+                        print_result(pred_id, 'loss', game_num, pred)
                     else:
                         pred['attempt'] += 1
-                        await update_prediction(pred_id, pred)
+                        print_update(pred_id, pred)
 
-async def send_result(pred_id, result, game_num, pred):
-    """Отправляет результат прогноза"""
-    # Здесь будет отправка в Telegram, пока просто логируем
+def print_result(pred_id, result, game_num, pred):
+    """Выводит результат прогноза"""
     if result == 'win':
         emoji = "✅"
     else:
@@ -184,12 +184,12 @@ async def send_result(pred_id, result, game_num, pred):
     logger.info(f"{emoji} Прогноз #{pred_id}: {result} в игре #{game_num} (масть {pred['suit']})")
     logger.info(f"📊 Статистика: {storage.stats['wins']} побед, {storage.stats['losses']} поражений")
 
-async def update_prediction(pred_id, pred):
-    """Обновляет статус прогноза"""
+def print_update(pred_id, pred):
+    """Выводит обновление прогноза"""
     next_game = pred['check_games'][pred['attempt']]
     logger.info(f"🔄 Прогноз #{pred_id} переходит к догону {pred['attempt']}, следующая игра: #{next_game}")
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_message(update: Update, context: CallbackContext):
     """Обрабатывает входящие сообщения"""
     try:
         if not update.channel_post:
@@ -213,7 +213,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         storage.games[game_num] = game_data
         
         # Проверяем активные прогнозы
-        await check_predictions(game_num, game_data)
+        check_predictions(game_num, game_data)
         
         # Проверяем паттерн
         predicted_suit = check_pattern(game_num, game_data['first_suit'])
@@ -267,18 +267,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"❌ Ошибка в handle_message: {e}")
 
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def error_callback(update, context):
     """Обрабатывает ошибки"""
     try:
-        if isinstance(context.error, Conflict):
+        if "Conflict" in str(context.error):
             logger.warning("⚠️ Обнаружен конфликт с другим экземпляром бота")
-            # Выходим с кодом ошибки, чтобы контейнер перезапустился
-            import sys
+            # Останавливаем текущий экземпляр
+            if hasattr(context, 'dispatcher'):
+                context.dispatcher.stop()
             sys.exit(1)
         else:
-            logger.error(f"❌ Необработанная ошибка: {context.error}")
+            logger.error(f"❌ Ошибка: {context.error}")
     except Exception as e:
-        logger.error(f"❌ Ошибка в error_handler: {e}")
+        logger.error(f"❌ Ошибка в error_callback: {e}")
+
+def signal_handler(signum, frame):
+    """Обработчик сигналов для graceful shutdown"""
+    logger.info("🛑 Получен сигнал остановки, завершаем работу...")
+    sys.exit(0)
 
 def main():
     print("\n" + "="*60)
@@ -293,38 +299,52 @@ def main():
     print("   - Пики (♠️) -> Бубна (♦️)")
     print("="*60)
     
+    # Устанавливаем обработчик сигналов
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
     max_retries = 3
     retry_count = 0
     
     while retry_count < max_retries:
+        updater = None
         try:
-            # Создаем приложение
-            application = Application.builder().token(TOKEN).build()
+            # Создаем Updater
+            updater = Updater(token=TOKEN, use_context=True)
             
             # Добавляем обработчик ошибок
-            application.add_error_handler(error_handler)
+            updater.dispatcher.add_error_handler(error_callback)
             
             # Добавляем обработчик сообщений
-            application.add_handler(MessageHandler(
+            updater.dispatcher.add_handler(MessageHandler(
                 filters.Chat(INPUT_CHANNEL_ID) & filters.TEXT,
                 handle_message
             ))
             
             # Запускаем бота
-            application.run_polling(drop_pending_updates=True)
+            logger.info("🚀 Запуск бота...")
+            updater.start_polling(drop_pending_updates=True)
+            updater.idle()
             break
             
-        except Conflict:
-            retry_count += 1
-            logger.warning(f"⚠️ Конфликт при запуске. Попытка {retry_count}/{max_retries}")
-            if retry_count < max_retries:
-                time.sleep(5)  # Ждем 5 секунд перед повторной попыткой
-            else:
-                logger.error("❌ Не удалось запустить бота после нескольких попыток")
-                raise
         except Exception as e:
-            logger.error(f"❌ Критическая ошибка: {e}")
-            raise
+            if "Conflict" in str(e):
+                retry_count += 1
+                logger.warning(f"⚠️ Конфликт при запуске. Попытка {retry_count}/{max_retries}")
+                if retry_count < max_retries:
+                    time.sleep(5)  # Ждем 5 секунд перед повторной попыткой
+                else:
+                    logger.error("❌ Не удалось запустить бота после нескольких попыток")
+                    sys.exit(1)
+            else:
+                logger.error(f"❌ Критическая ошибка: {e}")
+                sys.exit(1)
+        finally:
+            if updater:
+                try:
+                    updater.stop()
+                except:
+                    pass
 
 if __name__ == "__main__":
     main()
