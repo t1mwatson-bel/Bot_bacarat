@@ -4,9 +4,10 @@ import re
 from telegram import Update
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 import os
+import requests  # для сброса вебхука
 
 # ==================== НАСТРОЙКИ ====================
-TOKEN = os.getenv("TOKEN", "5482422004:AAHXLYyZ-qoCsycse1k9Qt6YRi9jmB24B-k")
+TOKEN = os.getenv("TOKEN", "1163348874:AAFgZEXveILvD4MbhQ8jiLTwIxs4puYhmq0")
 INPUT_CHANNEL_ID = int(os.getenv("INPUT_CHANNEL_ID", "-1003469691743"))
 OUTPUT_CHANNEL_ID = int(os.getenv("OUTPUT_CHANNEL_ID", "-1003842401391"))
 ADMIN_ID = int(os.getenv("ADMIN_ID", "683219603"))
@@ -19,8 +20,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ==================== ХРАНИЛИЩЕ ИГР ====================
-# Будем хранить последнюю нечётную игру (донора), чтобы потом проверить контроль
-last_donor = None  # {'num': int, 'first_suit': str}
+last_donor = None  # {'num': int, 'first_suit': str, 'range_type': str}
 
 
 # ==================== РАБОЧИЕ ДИАПАЗОНЫ ====================
@@ -59,8 +59,8 @@ def get_range_type(game_num):
         return 'type1'
     
     block_start = (game_num // 30) * 30
-    if block_start == 30 or block_start == 60 or block_start == 90 or block_start == 120 or block_start == 150:
-        # Для блоков 30-39, 60-69, 90-99, 120-129, 150-159
+    if block_start in (30, 60, 90, 120, 150, 180, 210):
+        # Для блоков 30-39, 60-69, 90-99, 120-129, 150-159, 180-189, 210-219
         if game_num <= block_start + 9:
             return 'type1'
     
@@ -132,7 +132,6 @@ def parse_game(text):
     # Извлекаем масти из карт
     suits = []
     for card in cards:
-        # Ищем масть в конце карты
         if '♥' in card:
             suits.append('♥️')
         elif '♠' in card:
@@ -252,6 +251,15 @@ def stats(update: Update, context: CallbackContext):
 
 # ==================== ЗАПУСК ====================
 def main():
+    # === СБРОС ВЕБХУКА ===
+    try:
+        url = f"https://api.telegram.org/bot{TOKEN}/deleteWebhook?drop_pending_updates=True"
+        response = requests.post(url)
+        print(f"✅ Вебхук сброшен: {response.json()}")
+    except Exception as e:
+        print(f"⚠️ Не удалось сбросить вебхук: {e}")
+    # ======================
+
     updater = Updater(TOKEN, use_context=True)
     dp = updater.dispatcher
     
