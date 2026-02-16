@@ -1,275 +1,599 @@
-import os
-import re
-import asyncio
+# -*- coding: utf-8 -*-
 import logging
-from datetime import datetime
-from typing import Dict, List, Optional
-from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
+import re
+import random
+import asyncio
+import os
+import sys
 import fcntl
+import urllib.request
+import urllib.error
 import json
-
-# Настройка логирования
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+from datetime import datetime
+from collections import defaultdict
+from telegram import Update
+from telegram.ext import (
+    Application,
+    MessageHandler,
+    filters,
+    ContextTypes
 )
-logger = logging.getLogger(__name__)
+from telegram.error import Conflict
 
-# ====================== КОНФИГУРАЦИЯ ======================
+# === НАСТРОЙКИ ===
 TOKEN = "5482422004:AAHXLYyZ-qoCsycse1k9Qt6YRi9jmB24B-k"
 INPUT_CHANNEL_ID = -1003469691743
 OUTPUT_CHANNEL_ID = -1003855079501
-BOT_USERNAME = "НЕЧЕТ→ЧЕТ v20.x"
+
+# Уникальный lock-файл для этого бота
+LOCK_FILE = f'/tmp/bot2_{TOKEN[-10:]}.lock'
+
 MAX_GAME_NUMBER = 1440
 
-# ✅ ТВОЙ ПОЛНЫЙ СПИСОК ДИАПАЗОНОВ
-VALID_RANGES = [
-    (1, 9), (20, 29), (40, 49), (60, 69), (80, 89),
-    (100, 109), (120, 129), (140, 149), (160, 169), (180, 189),
-    (200, 209), (220, 229), (240, 249), (260, 269), (280, 289),
-    (300, 309), (320, 329), (340, 349), (360, 369), (380, 389),
-    (400, 409), (420, 429), (440, 449), (460, 469), (480, 489),
-    (500, 509), (520, 529), (540, 549), (560, 569), (580, 589),
-    (600, 609), (620, 629), (640, 649), (660, 669), (680, 689),
-    (700, 709), (720, 729), (740, 749), (760, 769), (780, 789),
-    (800, 809), (820, 829), (840, 849), (860, 869), (880, 889),
-    (900, 909), (920, 929), (940, 949), (960, 969), (980, 989),
-    (1000, 1009), (1020, 1029), (1040, 1049), (1060, 1069), (1080, 1089),
-    (1100, 1109), (1120, 1129), (1140, 1149), (1160, 1169), (1180, 1189),
-    (1200, 1209), (1220, 1229), (1240, 1249), (1260, 1269), (1280, 1289),
-    (1300, 1309), (1320, 1329), (1340, 1349), (1360, 1369), (1380, 1389),
-    (1400, 1409), (1420, 1429), (1440, 1440)
-]
+# Масти
+SUITS = ["♥️", "♠️", "♣️", "♦️"]
 
+# ПРАВИЛА СМЕНЫ МАСТЕЙ (Красная <-> Черная)
 SUIT_CHANGE_RULES = {
-    '♠️': '♥️', '♣️': '♦️',
-    '♥️': '♠️', '♦️': '♣️'
+    '♥️': '♣️',  # Черва (красная) -> Трефа (черная)
+    '♦️': '♠️',  # Бубна (красная) -> Пики (черная)
+    '♠️': '♦️',  # Пики (черная) -> Бубна (красная)
+    '♣️': '♥️'   # Трефа (черная) -> Черва (красная)
 }
 
-SUIT_MAP = {'♠': '♠️', '♣': '♣️', '♥': '♥️', '♦': '♦️'}
+# ДИАПАЗОН (10-19, 30-39, 50-59 и т.д.)
+VALID_RANGES = [
+    (10, 19), (30, 39), (50, 59), (70, 79), (90, 99),
+    (110, 119), (130, 139), (150, 159), (170, 179), (190, 199),
+    (210, 219), (230, 239), (250, 259), (270, 279), (290, 299),
+    (310, 319), (330, 339), (350, 359), (370, 379), (390, 399),
+    (410, 419), (430, 439), (450, 459), (470, 479), (490, 499),
+    (510, 519), (530, 539), (550, 559), (570, 579), (590, 599),
+    (610, 619), (630, 639), (650, 659), (670, 679), (690, 699),
+    (710, 719), (730, 739), (750, 759), (770, 779), (790, 799),
+    (810, 819), (830, 839), (850, 859), (870, 879), (890, 899),
+    (910, 919), (930, 939), (950, 959), (970, 979), (990, 999),
+    (1010, 1019), (1030, 1039), (1050, 1059), (1070, 1079), (1090, 1099),
+    (1110, 1119), (1130, 1139), (1150, 1159), (1170, 1179), (1190, 1199),
+    (1210, 1219), (1230, 1239), (1250, 1259), (1270, 1279), (1290, 1299),
+    (1310, 1319), (1330, 1339), (1350, 1359), (1370, 1379), (1390, 1399),
+    (1410, 1419), (1430, 1439)
+]
 
-# ====================== ХРАНИЛИЩЕ ======================
-class Storage:
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Хранилище данных
+class GameStorage:
     def __init__(self):
-        self.patterns: Dict[int, Dict] = {}
-        self.odd_even_predictions: Dict[int, Dict] = {}
-        self.odd_even_counter = 0
-        self.lock_file = None
+        self.games = {}  # История игр
+        self.patterns = {}  # Ожидающие паттерны: {check_game: {'suit': suit, 'source_game': source_game}}
+        self.predictions = {}  # Активные прогнозы
+        self.stats = {'wins': 0, 'losses': 0}
+        self.prediction_counter = 0
 
-storage = Storage()
+storage = GameStorage()
+lock_fd = None
 
-# ====================== УТИЛИТЫ ======================
-def lock_bot():
-    lock_file = f"/tmp/bot2_{TOKEN.split(':')[1][-10:]}.lock"
-    storage.lock_file = open(lock_file, 'w')
+def is_valid_game(game_num):
+    """Проверяет, входит ли номер игры в допустимые диапазоны (для создания паттернов)"""
+    for start, end in VALID_RANGES:
+        if start <= game_num <= end:
+            return True
+    return False
+
+def acquire_lock():
+    """Блокировка для предотвращения множественных запусков"""
+    global lock_fd
     try:
-        fcntl.flock(storage.lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        logger.info(f"🔒 Lock: {lock_file}")
-    except IOError:
-        logger.error("❌ Второй бот уже запущен!")
-        exit(1)
+        lock_fd = open(LOCK_FILE, 'w')
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        logger.info(f"🔒 Блокировка получена: {LOCK_FILE}")
+        return True
+    except (IOError, OSError):
+        logger.error(f"❌ Бот уже запущен (lock файл: {LOCK_FILE})")
+        return False
 
-def is_valid_game(game_num: int) -> bool:
-    return any(start <= game_num <= end for start, end in VALID_RANGES)
+def release_lock():
+    """Освобождение блокировки"""
+    global lock_fd
+    if lock_fd:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            lock_fd.close()
+            if os.path.exists(LOCK_FILE):
+                os.unlink(LOCK_FILE)
+            logger.info("🔓 Блокировка освобождена")
+        except Exception as e:
+            logger.error(f"❌ Ошибка при освобождении блокировки: {e}")
 
-def parse_suits(text: str) -> List[str]:
+def check_bot_token():
+    """Проверка токена бота"""
+    try:
+        url = f"https://api.telegram.org/bot{TOKEN}/getMe"
+        req = urllib.request.Request(url, method='GET')
+        
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            if data.get('ok'):
+                bot_info = data['result']
+                logger.info(f"✅ Бот @{bot_info['username']} авторизован")
+                return True
+            else:
+                logger.error(f"❌ Ошибка авторизации: {data}")
+                return False
+    except Exception as e:
+        logger.error(f"❌ Ошибка при проверке токена: {e}")
+        return False
+
+def extract_left_part(text):
+    """Извлекает левую часть сообщения (руку игрока)"""
+    # Ищем разделители, после которых идет правая рука
+    separators = [' 👈 ', '👈', ' - ', ' – ', '—', '-', '👉👈', '👈👉', '🔰']
+    
+    for sep in separators:
+        if sep in text:
+            parts = text.split(sep, 1)
+            left_part = parts[0].strip()
+            # Убираем номер игры из левой части если он там есть
+            left_part = re.sub(r'#N\d+\.?\s*', '', left_part)
+            return left_part
+    
+    return text.strip()
+
+def parse_game_data(text):
+    """Парсит данные игры из текста - ТОЛЬКО ЛЕВАЯ РУКА (БЕЗ ПРОВЕРКИ ДИАПАЗОНОВ)"""
+    # Ищем номер игры
+    match = re.search(r'#N(\d+)', text)
+    if not match:
+        return None
+    
+    game_num = int(match.group(1))
+    
+    # Проверяем наличие специальных тегов
+    has_r_tag = '#R' in text
+    has_x_tag = '#X' in text or '#X🟡' in text
+    has_check = '✅' in text
+    has_t = re.search(r'#T\d+', text) is not None
+    
+    # Извлекаем ТОЛЬКО левую часть (руку игрока)
+    left_part = extract_left_part(text)
+    logger.info(f"👈 Левая рука (ИГРОК): {left_part}")
+    
+    # Ищем масти ТОЛЬКО в левой части
     suits = []
-    suit_pattern = r'[A2-9TJQK][♠♣♥♦]'
-    matches = re.findall(suit_pattern, text)
-    for match in matches:
-        suit_char = match[-1]
-        suits.append(SUIT_MAP.get(suit_char, suit_char))
-    return suits
-
-def compare_suits(suit1: str, suit2: str) -> bool:
-    return suit1 == suit2
-
-def extract_game_number(text: str) -> Optional[int]:
-    match = re.search(r'#N?(\d+)', text)
-    return int(match.group(1)) if match else None
-
-def parse_game_data(text: str) -> Dict:
-    game_num = extract_game_number(text)
-    if not game_num:
-        return {}
+    suit_patterns = {
+        '♥️': r'[♥❤♡]',
+        '♠️': r'[♠♤]',
+        '♣️': r'[♣♧]',
+        '♦️': r'[♦♢]'
+    }
     
-    # ✅ ИСПРАВЛЕНО: убраны лишние \\
-    left_hand_pattern = r'0\\(([A2-9TJQK♠♣♥♦\s]+)\\)'
-    left_match = re.search(left_hand_pattern, text)
+    for suit, pattern in suit_patterns.items():
+        matches = re.findall(pattern, left_part)
+        for _ in matches:
+            suits.append(suit)
     
-    all_suits = []
-    first_suit = None
+    if not suits:
+        logger.warning(f"⚠️ В левой руке игры #{game_num} не найдено мастей")
+        return None
     
-    if left_match:
-        left_cards = left_match.group(1)
-        all_suits = parse_suits(left_cards)
-        if all_suits:
-            first_suit = all_suits[0]
+    # Определяем первую и вторую карту (бот2 смотрит первую ИЛИ вторую)
+    first_suit = suits[0] if len(suits) > 0 else None
+    second_suit = suits[1] if len(suits) > 1 else None
+    
+    logger.info(f"📊 Левая рука игры #{game_num}: карты {suits}")
+    logger.info(f"📊 Теги: #R={has_r_tag}, #X={has_x_tag}")
     
     return {
         'game_num': game_num,
         'first_suit': first_suit,
-        'all_suits': all_suits,
-        'text': text
+        'second_suit': second_suit,
+        'all_suits': suits,
+        'left_cards': suits,
+        'has_r_tag': has_r_tag,
+        'has_x_tag': has_x_tag,
+        'has_check': has_check,
+        'has_t': has_t
     }
 
-# ====================== ✅ ИСПРАВЛЕННЫЕ ФУНКЦИИ ======================
-async def check_odd_even_patterns(game_num: int, game_data: Dict, context: ContextTypes.DEFAULT_TYPE):
-    """🔍 НЕЧЕТ→ЧЕТ паттерны"""
-    logger.info(f"\n🔍 НЕЧЕТ→ЧЕТ #{game_num}")
+def compare_suits(suit1, suit2):
+    """Сравнивает две масти"""
+    if not suit1 or not suit2:
+        return False
     
-    first_suit = game_data.get('first_suit')
+    suit_map = {
+        '♥️': '♥', '♥': '♥', '❤': '♥', '♡': '♥',
+        '♠️': '♠', '♠': '♠', '♤': '♠',
+        '♣️': '♣', '♣': '♣', '♧': '♣',
+        '♦️': '♦', '♦': '♦', '♢': '♦'
+    }
+    
+    s1 = suit_map.get(suit1, suit1)
+    s2 = suit_map.get(suit2, suit2)
+    
+    s1 = s1.replace('\ufe0f', '').replace('️', '').strip()
+    s2 = s2.replace('\ufe0f', '').replace('️', '').strip()
+    
+    return s1 == s2
+
+async def check_predictions(current_game_num, game_data, context):
+    """Проверяет активные прогнозы ТОЛЬКО когда пришла следующая игра"""
+    logger.info(f"\n{'🔍'*30}")
+    logger.info(f"🔍 ПРОВЕРКА ПРОГНОЗОВ для игры #{current_game_num}")
+    logger.info(f"{'🔍'*30}")
+    
+    # Показываем все активные прогнозы
+    active_preds = [p for p in storage.predictions.values() if p['status'] == 'pending']
+    logger.info(f"📊 Активных прогнозов: {len(active_preds)}")
+    
+    for pred_id, pred in list(storage.predictions.items()):
+        if pred['status'] != 'pending':
+            continue
+        
+        target_game = pred['target']
+        logger.info(f"\n🎯 Прогноз #{pred_id}: целевая игра #{target_game}, ищем масть {pred['suit']}")
+        
+        # Проверяем, является ли текущая игра следующей после целевой
+        if current_game_num == target_game + 1:
+            logger.info(f"✅ Игра #{current_game_num} - это следующая игра после целевой #{target_game}")
+            logger.info(f"   Значит, игра #{target_game} уже завершена и можно проверять результат")
+            
+            # Получаем данные целевой игры из истории
+            target_game_data = storage.games.get(target_game)
+            
+            if not target_game_data:
+                logger.info(f"⚠️ Данные игры #{target_game} еще не сохранены, пропускаем")
+                continue
+            
+            target_cards = target_game_data.get('all_suits', [])
+            logger.info(f"🃏 Карты левой руки целевой игры #{target_game}: {target_cards}")
+            
+            # BOT2 смотрит первую ИЛИ вторую карту
+            suit_found = False
+            found_positions = []
+            
+            for idx, card_suit in enumerate(target_cards):
+                if idx < 2 and compare_suits(pred['suit'], card_suit):  # Только первые 2 карты
+                    suit_found = True
+                    found_positions.append(idx + 1)
+                    logger.info(f"   ✅✅✅ НАШЛИ в карте #{idx + 1} игры #{target_game}: {card_suit}")
+            
+            # Также проверяем теги в целевой игре
+            has_r_tag = target_game_data.get('has_r_tag', False)
+            has_x_tag = target_game_data.get('has_x_tag', False)
+            has_check = target_game_data.get('has_check', False)
+            
+            if suit_found or has_r_tag or has_x_tag or has_check:
+                if suit_found:
+                    logger.info(f"✅ ПРОГНОЗ #{pred_id} ВЫИГРАЛ! Нашли масть {pred['suit']} в игре #{target_game}")
+                else:
+                    logger.info(f"✅ ПРОГНОЗ #{pred_id} ВЫИГРАЛ по тегу в игре #{target_game}!")
+                
+                pred['status'] = 'win'
+                pred['found_in_cards'] = found_positions
+                storage.stats['wins'] += 1
+                await update_prediction_result(pred, target_game, 'win', context)
+            else:
+                logger.info(f"❌ Масть {pred['suit']} не найдена в первых двух картах игры #{target_game}")
+                
+                # Проверяем, есть ли еще попытки (догоны)
+                if pred['attempt'] >= 2:  # Всего 3 попытки (0,1,2)
+                    logger.info(f"💔 Все попытки исчерпаны")
+                    pred['status'] = 'loss'
+                    storage.stats['losses'] += 1
+                    await update_prediction_result(pred, target_game, 'loss', context)
+                else:
+                    # Переходим к следующей попытке (догону)
+                    pred['attempt'] += 1
+                    # Сдвигаем целевую игру для догона
+                    pred['target'] = pred['check_games'][pred['attempt']]
+                    logger.info(f"🔄 Прогноз #{pred_id} переходит к догону {pred['attempt']}, новая целевая игра: #{pred['target']}")
+                    await update_prediction_message(pred, context)
+
+async def check_patterns(game_num, game_data, context):
+    """Проверяет ожидающие паттерны и создает прогнозы (ТОЛЬКО для нужных диапазонов)"""
+    first_suit = game_data['first_suit']
+    second_suit = game_data['second_suit']
+    
     if not first_suit:
         return
     
-    # 1️⃣ ПРОВЕРКА паттерна в ЧЕТНОЙ игре
-    if game_num % 2 == 0 and game_num in storage.patterns:
+    # Проверяем, четная или нечетная игра
+    is_odd = game_num % 2 != 0
+    
+    # Проверяем, есть ли паттерн для этой игры
+    if game_num in storage.patterns:
         pattern = storage.patterns[game_num]
-        all_suits = game_data['all_suits']
+        expected_suit = pattern['suit']
         
-        suit_found = (
-            (len(all_suits) >= 1 and compare_suits(pattern['suit'], all_suits[0])) or
-            (len(all_suits) >= 2 and compare_suits(pattern['suit'], all_suits[1]))
-        )
+        # Проверяем ИЛИ в первой карте, ИЛИ во второй (только левая рука)
+        suit_found = False
+        if compare_suits(expected_suit, first_suit):
+            suit_found = True
+            logger.info(f"✅ Нашли масть {expected_suit} в первой карте левой руки игры #{game_num}")
+        elif second_suit and compare_suits(expected_suit, second_suit):
+            suit_found = True
+            logger.info(f"✅ Нашли масть {expected_suit} во второй карте левой руки игры #{game_num}")
         
         if suit_found:
-            logger.info(f"✅ НЕЧЕТ#{pattern['source_game']}({pattern['suit']}) → ЧЕТ#{game_num}")
+            # Паттерн подтвердился! Создаем прогноз
+            target_game = game_num + 1
+            predicted_suit = SUIT_CHANGE_RULES.get(expected_suit)
             
-            predicted_suit = SUIT_CHANGE_RULES.get(pattern['suit'])
             if predicted_suit:
-                target_game = game_num + 1
-                storage.odd_even_counter += 1
-                pred_id = storage.odd_even_counter
+                storage.prediction_counter += 1
+                pred_id = storage.prediction_counter
+                
+                # Игры для догона (следующие 3 игры после целевой)
+                check_games = [
+                    target_game,
+                    target_game + 1,
+                    target_game + 2
+                ]
                 
                 prediction = {
                     'id': pred_id,
-                    'source_game': pattern['source_game'],
-                    'pattern_game': game_num,
-                    'target_game': target_game,
-                    'predicted_suit': predicted_suit,
-                    'check_games': [target_game, target_game+1, target_game+2],
+                    'suit': predicted_suit,
+                    'target': target_game,
+                    'check_games': check_games,
                     'status': 'pending',
-                    'attempt': 0
+                    'attempt': 0,
+                    'created': datetime.now(),
+                    'channel_message_id': None,
+                    'found_in_cards': []
                 }
-                storage.odd_even_predictions[pred_id] = prediction
-                await send_odd_even_prediction(prediction, context)
+                
+                storage.predictions[pred_id] = prediction
+                
+                logger.info(f"🎯 ПАТТЕРН ПОДТВЕРЖДЕН!")
+                logger.info(f"   Исходная игра #{pattern['source_game']} (НЕЧЕТНАЯ): масть {pattern['suit']}")
+                logger.info(f"   Проверочная игра #{game_num}: масть найдена в левой руке")
+                logger.info(f"🤖 НОВЫЙ ПРОГНОЗ #{pred_id}: {predicted_suit} в игре #{target_game}")
+                logger.info(f"📋 Проверка: {check_games}")
+                
+                # Отправляем прогноз в канал
+                await send_prediction(prediction, context)
+        else:
+            logger.info(f"❌ Паттерн не подтвержден: в левой руке игры #{game_num} нет масти {expected_suit}")
         
+        # Удаляем обработанный паттерн
         del storage.patterns[game_num]
     
-    # 2️⃣ СОЗДАНИЕ паттерна из НЕЧЕТНОЙ
-    if game_num % 2 != 0 and first_suit and is_valid_game(game_num):
+    # Создаем новый паттерн ТОЛЬКО от НЕЧЕТНЫХ игр и ТОЛЬКО в нужных диапазонах
+    if is_odd and is_valid_game(game_num):
         check_game = game_num + 3
         storage.patterns[check_game] = {
             'suit': first_suit,
-            'source_game': game_num
+            'source_game': game_num,
+            'created': datetime.now()
         }
-        logger.info(f"📝 НЕЧЕТ#{game_num}({first_suit}) → ЧЕТ#{check_game}")
-
-async def check_odd_even_predictions(game_num: int, game_data: Dict, context: ContextTypes.DEFAULT_TYPE):
-    """🎯 Проверка НЕЧЕТ→ЧЕТ прогнозов"""
-    player_cards = game_data['all_suits']
-    if not player_cards:
-        return
-    
-    predictions_to_check = []
-    for pred_id, prediction in storage.odd_even_predictions.items():
-        if prediction['status'] == 'pending' and game_num in prediction['check_games']:
-            predictions_to_check.append((pred_id, prediction))
-    
-    for pred_id, prediction in predictions_to_check:
-        predicted_suit = prediction['predicted_suit']
-        suit_found = any(compare_suits(predicted_suit, card) for card in player_cards)
         
-        if suit_found:
-            logger.info(f"🎉 НЕЧЕТ→ЧЕТ #{pred_id} ЗАШЁЛ #{game_num}!")
-            prediction['status'] = 'win'
-            prediction['win_game'] = game_num
-            await send_odd_even_win(pred_id, prediction, game_data, context)
-            del storage.odd_even_predictions[pred_id]
+        logger.info(f"📝 Создан паттерн от НЕЧЕТНОЙ игры #{game_num}({first_suit}) -> проверка в #{check_game} (ищем в 1й или 2й карте левой руки)")
+    elif is_odd and not is_valid_game(game_num):
+        logger.info(f"⏭️ Игра #{game_num} НЕЧЕТНАЯ, но вне диапазона - паттерн не создаем")
+    else:
+        logger.info(f"⏭️ Игра #{game_num} ЧЕТНАЯ - пропускаем создание паттерна")
+
+async def send_prediction(prediction, context):
+    """Отправляет прогноз в канал"""
+    try:
+        text = (
+            f"🎯 *BOT2 - НОВЫЙ ПРОГНОЗ #{prediction['id']}*\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"📊 *ДЕТАЛИ:*\n"
+            f"┣ 🎯 Целевая игра: #{prediction['target']}\n"
+            f"┣ 🃏 Прогнозируемая масть: {prediction['suit']}\n"
+            f"┣ 🔄 Догон 1: #{prediction['check_games'][1]}\n"
+            f"┣ 🔄 Догон 2: #{prediction['check_games'][2]}\n"
+            f"┗ ⏱ {datetime.now().strftime('%H:%M:%S')}"
+        )
+        
+        message = await context.bot.send_message(
+            chat_id=OUTPUT_CHANNEL_ID,
+            text=text,
+            parse_mode='Markdown'
+        )
+        
+        prediction['channel_message_id'] = message.message_id
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка при отправке прогноза: {e}")
+
+async def update_prediction_result(prediction, game_num, result, context):
+    """Обновляет сообщение с результатом прогноза"""
+    try:
+        if not prediction.get('channel_message_id'):
+            return
+        
+        if result == 'win':
+            emoji = "✅"
+            status = "ЗАШЁЛ"
+            result_emoji = "🏆"
         else:
-            prediction['attempt'] += 1
-            if prediction['attempt'] >= 3:
-                logger.info(f"❌ НЕЧЕТ→ЧЕТ #{pred_id} ПРОИГРАЛ")
-                del storage.odd_even_predictions[pred_id]
-
-# ====================== ✅ ИСПРАВЛЕННЫЕ ОТПРАВКИ ======================
-async def send_odd_even_prediction(prediction: Dict, context: ContextTypes.DEFAULT_TYPE):
-    """🚀 НЕЧЕТ→ЧЕТ прогноз"""
-    pattern_suit = storage.patterns.get(prediction['pattern_game'], {}).get('suit', '?')
-    
-    message = (
-        f"🎯 <b>НЕЧЕТ→ЧЕТ #{prediction['id']}</b>\n\n"
-        f"📊 <b>ПАТТЕРН:</b> НЕЧЕТ #{prediction['source_game']}({pattern_suit}) → ЧЕТ #{prediction['pattern_game']}\n"
-        f"🔄 <b>ПРОГНОЗ:</b> <b>{prediction['predicted_suit']}</b> #{prediction['target_game']}\n"
-        f"🔄 Догоны: #{prediction['target_game']+1}, #{prediction['target_game']+2}\n\n"
-        f"⚡ <b>НЕЧЕТ→ЧЕТ +3</b>"
-    )
-    
-    msg = await context.bot.send_message(
-        chat_id=OUTPUT_CHANNEL_ID,
-        text=message,
-        parse_mode='HTML'
-    )
-    prediction['channel_message_id'] = msg.message_id
-
-async def send_odd_even_win(pred_id: int, prediction: Dict, game_data: Dict, context: ContextTypes.DEFAULT_TYPE):
-    """✅ Выигрыш НЕЧЕТ→ЧЕТ"""
-    message = (
-        f"🎉 <b>✅ НЕЧЕТ→ЧЕТ #{pred_id} ВЫИГРЫШ!</b>\n\n"
-        f"📊 НЕЧЕТ #{prediction['source_game']} → ЧЕТ #{prediction['pattern_game']}\n"
-        f"🎯 <b>{prediction['predicted_suit']} #{prediction['win_game']} ✅</b>\n\n"
-        f"⚡ <b>НЕЧЕТ→ЧЕТ СИСТЕМА РАБОТАЕТ!</b>"
-    )
-    
-    await context.bot.send_message(chat_id=OUTPUT_CHANNEL_ID, text=message, parse_mode='HTML')
-
-# ====================== ✅ ИСПРАВЛЕННЫЙ ОБРАБОТЧИК ======================
-async def handle_channel_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.channel_post and update.channel_post.chat.id == INPUT_CHANNEL_ID:
-        text = update.channel_post.text or ""
-        game_data = parse_game_data(text)
+            emoji = "❌"
+            status = "НЕ ЗАШЁЛ"
+            result_emoji = "💔"
         
-        if game_data:  # ✅ ИСПРАВЛЕНО
-            game_num = game_data['game_num']
-            logger.info(f"\n📥 #{game_num}: {game_data['all_suits']}")
-            
-            await asyncio.gather(
-                check_odd_even_patterns(game_num, game_data, context),
-                check_odd_even_predictions(game_num, game_data, context)
-            )
+        attempt_names = ["основная", "догон 1", "догон 2"]
+        attempt_text = attempt_names[prediction['attempt']]
+        
+        cards_info = ""
+        if prediction.get('found_in_cards'):
+            cards_list = ", ".join([f"#{card}" for card in prediction['found_in_cards']])
+            cards_info = f"┣ 🃏 Найдена в картах: {cards_list}\n"
+        
+        text = (
+            f"{emoji} *BOT2 - ПРОГНОЗ #{prediction['id']} {status}!* {result_emoji}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"📊 *РЕЗУЛЬТАТ:*\n"
+            f"┣ 🎯 Целевая игра: #{prediction['target']}\n"
+            f"┣ 🃏 Масть: {prediction['suit']}\n"
+            f"┣ 🔄 Попытка: {attempt_text}\n"
+            f"┣ 🎮 Проверено в игре: #{game_num}\n"
+            f"{cards_info}"
+            f"┣ 📊 Статистика: {storage.stats['wins']}✅ / {storage.stats['losses']}❌\n"
+            f"┗ ⏱ {datetime.now().strftime('%H:%M:%S')}"
+        )
+        
+        await context.bot.edit_message_text(
+            chat_id=OUTPUT_CHANNEL_ID,
+            message_id=prediction['channel_message_id'],
+            text=text,
+            parse_mode='Markdown'
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка при обновлении результата: {e}")
 
-# ====================== MAIN ======================
-async def main():
-    lock_bot()
+async def update_prediction_message(prediction, context):
+    """Обновляет сообщение о догоне"""
+    try:
+        if not prediction.get('channel_message_id'):
+            return
+        
+        next_game = prediction['target']
+        
+        text = (
+            f"🔄 *BOT2 - ПРОГНОЗ #{prediction['id']} - ДОГОН {prediction['attempt']}*\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"📊 *ДЕТАЛИ:*\n"
+            f"┣ 🎯 Целевая игра: #{prediction['target']}\n"
+            f"┣ 🃏 Масть: {prediction['suit']}\n"
+            f"┣ 🔄 Текущая попытка: {prediction['attempt']}/2\n"
+            f"┣ 🎯 Следующая игра: #{next_game}\n"
+            f"┗ ⏱ {datetime.now().strftime('%H:%M:%S')}"
+        )
+        
+        await context.bot.edit_message_text(
+            chat_id=OUTPUT_CHANNEL_ID,
+            message_id=prediction['channel_message_id'],
+            text=text,
+            parse_mode='Markdown'
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка при обновлении сообщения: {e}")
+
+async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает входящие сообщения"""
+    try:
+        if not update.channel_post:
+            return
+        
+        text = update.channel_post.text
+        if not text:
+            return
+        
+        logger.info(f"\n{'='*60}")
+        logger.info(f"📥 Получено: {text[:150]}...")
+        
+        # Парсим данные игры (БЕЗ ПРОВЕРКИ ДИАПАЗОНОВ)
+        game_data = parse_game_data(text)
+        if not game_data:
+            return
+        
+        game_num = game_data['game_num']
+        first_suit = game_data['first_suit']
+        second_suit = game_data['second_suit']
+        
+        logger.info(f"📊 Игра #{game_num} ({'НЕЧЕТНАЯ' if game_num%2 else 'ЧЕТНАЯ'}): левая рука - 1-я карта {first_suit}, 2-я карта {second_suit}")
+        logger.info(f"📊 Теги: #R={game_data.get('has_r_tag', False)}, #X={game_data.get('has_x_tag', False)}")
+        
+        # Сохраняем игру в историю (ВСЕГДА)
+        storage.games[game_num] = game_data
+        
+        # 1. Проверяем активные прогнозы
+        await check_predictions(game_num, game_data, context)
+        
+        # 2. ПОТОМ проверяем паттерны и создаем новые прогнозы (только для нужных диапазонов)
+        await check_patterns(game_num, game_data, context)
+        
+        # Ограничиваем историю
+        if len(storage.games) > 200:
+            oldest = min(storage.games.keys())
+            del storage.games[oldest]
+        
+        # Очищаем старые паттерны (> 50 игр)
+        for check_game in list(storage.patterns.keys()):
+            if check_game < game_num - 50:
+                logger.info(f"🗑️ Удаляем старый паттерн для игры #{check_game}")
+                del storage.patterns[check_game]
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка в handle_new_game: {e}")
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает ошибки"""
+    try:
+        if isinstance(context.error, Conflict):
+            logger.warning("⚠️ Обнаружен конфликт с другим экземпляром бота")
+            release_lock()
+            sys.exit(1)
+        else:
+            logger.error(f"❌ Ошибка: {context.error}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка в error_handler: {e}")
+
+def main():
+    print("\n" + "="*60)
+    print("🤖 BOT2 (КРАСНАЯ <-> ЧЕРНАЯ) ЗАПУЩЕН")
+    print("="*60)
+    print(f"✅ Диапазоны для создания паттернов: 10-19, 30-39, 50-59... до 1430-1439")
+    print(f"✅ Всего диапазонов: {len(VALID_RANGES)}")
+    print("✅ ПРОВЕРЯЕТ ПРОГНОЗЫ ТОЛЬКО ПОСЛЕ ЗАВЕРШЕНИЯ ИГРЫ")
+    print("✅ Анализирует ПЕРВУЮ ИЛИ ВТОРУЮ карту левой руки")
+    print("✅ Правила смены мастей (Красная <-> Черная):")
+    print("   - Черва (♥️) -> Трефа (♣️)")
+    print("   - Бубна (♦️) -> Пики (♠️)")
+    print("   - Пики (♠️) -> Бубна (♦️)")
+    print("   - Трефа (♣️) -> Черва (♥️)")
+    print("✅ Выходной канал: -1003855079501")
+    print("="*60)
     
-    print("="*60)
-    print(f"🤖 {BOT_USERNAME}")
-    print("="*60)
-    print("🎯 НЕЧЕТ→ЧЕТ v20.x")
-    print("📊 Логика: #1237♠️→#1240♠️→♥️#1241-1243")
-    print("✅ 1-я НЕчет → 1/2-я Чет → ВСЕ 3 прогноз!")
-    print("="*60)
+    # Проверяем блокировку
+    if not acquire_lock():
+        logger.error("❌ Не удалось получить блокировку. Возможно бот уже запущен.")
+        sys.exit(1)
     
+    # Проверяем токен
+    if not check_bot_token():
+        logger.error("❌ Ошибка авторизации бота")
+        release_lock()
+        sys.exit(1)
+    
+    # Создаем приложение
     application = Application.builder().token(TOKEN).build()
+    
+    # Добавляем обработчик ошибок
+    application.add_error_handler(error_handler)
+    
+    # Добавляем обработчик сообщений
     application.add_handler(MessageHandler(
-        filters.Chat(chat_id=INPUT_CHANNEL_ID) & filters.TEXT,
-        handle_channel_message
+        filters.Chat(INPUT_CHANNEL_ID) & filters.TEXT,
+        handle_new_game
     ))
     
-    await application.bot.delete_webhook()
-    await application.initialize()
-    await application.start()
-    logger.info("✅ НЕЧЕТ→ЧЕТ BOT started!")
-    
-    await application.updater.start_polling(drop_pending_updates=True)
-    await asyncio.Event().wait()
+    try:
+        # Запускаем бота
+        application.run_polling(
+            allowed_updates=['channel_post'],
+            drop_pending_updates=True
+        )
+    except Conflict:
+        logger.error("❌ Конфликт при запуске")
+        release_lock()
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"❌ Критическая ошибка: {e}")
+        release_lock()
+        sys.exit(1)
+    finally:
+        release_lock()
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("🛑 Второй бот остановлен")
-    finally:
-        if storage.lock_file:
-            storage.lock_file.close()
+    main()
