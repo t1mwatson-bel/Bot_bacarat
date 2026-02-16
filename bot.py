@@ -20,7 +20,7 @@ INPUT_CHANNEL_ID = -1003469691743
 OUTPUT_CHANNEL_ID = -1003855079501
 LOCK_FILE = f'/tmp/bot_{TOKEN[-10:]}.lock'
 
-# Диапазоны НЕЧЕТНЫХ игр (72 диапазона)
+# Диапазоны НЕЧЕТНЫХ игр
 VALID_RANGES = [
     (1, 9), (20, 29), (40, 49), (60, 69), (80, 89),
     (100, 109), (120, 129), (140, 149), (160, 169), (180, 189),
@@ -40,8 +40,8 @@ VALID_RANGES = [
 ]
 
 SUIT_CHANGE_RULES = {
-    '♥️': '♣️', '♣️': '♥️',  # Черва ↔ Трефа
-    '♦️': '♠️', '♠️': '♦️'   # Бубна ↔ Пики
+    '♥️': '♣️', '♣️': '♥️',
+    '♦️': '♠️', '♠️': '♦️'
 }
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -77,7 +77,6 @@ def release_lock():
             fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
             lock_fd.close()
             os.unlink(LOCK_FILE)
-            logger.info("🔓 Lock освобожден")
         except: pass
 
 def clear_telegram_queue():
@@ -108,34 +107,26 @@ def send_to_channel(text):
         logger.error(f"❌ Отправка: {e}")
 
 def is_valid_game(game_num):
-    """НЕЧЕТ + диапазон"""
     if game_num % 2 == 0: return False
     return any(start <= game_num <= end for start, end in VALID_RANGES)
 
 def parse_game_data(text):
-    """👈 ЛЕВАЯ РУКА"""
     match = re.search(r'#N(\d+)', text)
     if not match: return None
     
     game_num = int(match.group(1))
-    if not is_valid_game(game_num): 
-        logger.info(f"⏭️ #{game_num} вне диапазона")
-        return None
+    if not is_valid_game(game_num): return None
     
-    # Разделитель
     separator = None
     for sep in ['-', '🔰', '👈']:
         if sep in text:
             separator = sep
             break
     
-    if not separator:
-        logger.warning(f"⚠️ #{game_num}: нет разделителя")
-        return None
+    if not separator: return None
     
     left_part = text.split(separator)[0]
     
-    # ✅ ИСПРАВЛЕНА РЕГУЛЯРКА ДЛЯ КАРТ
     suits = []
     suit_patterns = {
         '♥️': r'[♥❤♡]', '♠️': r'[♠♤]', 
@@ -146,9 +137,7 @@ def parse_game_data(text):
         matches = re.findall(pattern, left_part)
         suits.extend([suit] * len(matches))
     
-    if not suits: 
-        logger.warning(f"⚠️ #{game_num}: нет мастей")
-        return None
+    if not suits: return None
     
     first_suit = suits[0]
     logger.info(f"👈 #{game_num}: {first_suit}, масти: {suits}")
@@ -160,8 +149,8 @@ def parse_game_data(text):
     }
 
 def check_pattern(game_num, current_suit):
-    """📝 ПАТТЕРН +3 игры (1189→1192)"""
-    check_game = game_num + 3  # ✅ ИСПРАВЛЕНО: +3 вместо +2!
+    """📝 +3 игры (1189→1192)"""
+    check_game = game_num + 3  # ✅ ИСПРАВЛЕНО!
     storage.pattern_memory[check_game] = {
         'source_game': game_num,
         'suit': current_suit,
@@ -170,32 +159,24 @@ def check_pattern(game_num, current_suit):
     logger.info(f"📝 #{game_num}({current_suit}) → #{check_game}")
 
 def check_pattern_confirmation(game_num, game_data):
-    """✅ ПРОВЕРКА ПАТТЕРНА"""
-    if game_num not in storage.pattern_memory: 
-        return
+    if game_num not in storage.pattern_memory: return
     
     pattern = storage.pattern_memory[game_num]
-    if pattern['checked']: 
-        return
+    if pattern['checked']: return
     
     pattern['checked'] = True
     
-    # Проверяем ВСЕ масти (не только первую)
     if pattern['suit'] in game_data['all_suits']:
         logger.info(f"✅ ПАТТЕРН #{pattern['source_game']}({pattern['suit']})→#{game_num}")
-        
         predicted_suit = SUIT_CHANGE_RULES.get(pattern['suit'])
         if predicted_suit:
             target_game = game_num + 1
-            logger.info(f"🎯 ПРОГНОЗ {predicted_suit} на #{target_game}")
             create_prediction(target_game, predicted_suit, pattern['source_game'])
-        else:
-            logger.error(f"❌ Нет правила для {pattern['suit']}")
     else:
         logger.info(f"❌ #{pattern['source_game']}→#{game_num}: нет {pattern['suit']}")
 
 def create_prediction(target_game, predicted_suit, source_game):
-    """🎯 ПРОГНОЗ"""
+    """🎯 КРАСИВЫЙ ФОРМАТ ПРОГНОЗА"""
     # Защита от дублей
     for pred in storage.predictions.values():
         if pred['target'] == target_game and pred['status'] == 'pending':
@@ -218,21 +199,20 @@ def create_prediction(target_game, predicted_suit, source_game):
     }
     storage.predictions[pred_id] = prediction
     
-    message = f"\n🆕 НОВЫЙ ПРОГНОЗ #{pred_id}\n"
+    # ✅ ТОЧНО ТАКИЙ ФОРМАТ!
+    message = f"NOVЫЙ ПРОГНОЗ #{pred_id}\n"
     message += "━━━━━━━━━━━━━━━━━━━━━━\n\n"
     message += f"📊 ДЕТАЛИ:\n"
-    message += f"┣ 🎯 #{source_game}\n"
-    message += f"┣ 🎯 #{target_game}\n"
-    message += f"┣ 🃏 {predicted_suit}\n"
-    message += f"┣ 🔄 {'#' + str(check_games[1]) if len(check_games)>1 else '-'}\n"
-    message += f"┣ 🔄 {'#' + str(check_games[2]) if len(check_games)>2 else '-'}\n"
-    message += f"┗ ⏱ {datetime.now().strftime('%H:%M:%S')}"
+    message += f"┣ 🎯 Целевая игра: #{target_game}\n"
+    message += f"┣ 🃏 Прогнозируемая масть: {predicted_suit}\n"
+    message += f"┣ 🔄 Догон 1: #{check_games[1] if len(check_games)>1 else '-'}\n"
+    message += f"┣ 🔄 Догон 2: #{check_games[2] if len(check_games)>2 else '-'}\n"
+    message += f"┗ ⏱ {datetime.now().strftime('%H:%M:%S')} время московское"
     
     logger.info(message)
     send_to_channel(message)
 
 def check_predictions(game_num, game_data):
-    """🔍 ПРОГНОЗЫ"""
     for pred_id, pred in list(storage.predictions.items()):
         if pred['status'] != 'pending': continue
         
@@ -242,18 +222,18 @@ def check_predictions(game_num, game_data):
                 if pred['suit'] in game_data['all_suits']:
                     pred['status'] = 'win'
                     storage.stats['wins'] += 1
-                    message = f"\n✅ ПРОГНОЗ #{pred_id} ВЫИГРАЛ\n━━━━━━━━━━━━━━━━━━━━━━\n📊 #{game_num} | {pred['suit']} | {storage.stats['wins']}✅/{storage.stats['losses']}❌"
+                    message = f"✅ ПРОГНОЗ #{pred_id} ВЫИГРАЛ\n━━━━━━━━━━━━━━━━━━━━━━\n📊 #{game_num} | {pred['suit']} | {storage.stats['wins']}✅/{storage.stats['losses']}❌"
                     send_to_channel(message)
                 else:
                     if idx == len(pred['check_games']) - 1:
                         pred['status'] = 'loss'
                         storage.stats['losses'] += 1
-                        message = f"\n❌ ПРОГНОЗ #{pred_id} ПРОИГРАЛ\n━━━━━━━━━━━━━━━━━━━━━━\n📊 #{game_num} | {pred['suit']} | {storage.stats['wins']}✅/{storage.stats['losses']}❌"
+                        message = f"❌ ПРОГНОЗ #{pred_id} ПРОИГРАЛ\n━━━━━━━━━━━━━━━━━━━━━━\n📊 #{game_num} | {pred['suit']} | {storage.stats['wins']}✅/{storage.stats['losses']}❌"
                         send_to_channel(message)
                     else:
                         pred['attempt'] = idx + 1
                         next_game = pred['check_games'][pred['attempt']]
-                        message = f"\n🔄 ДОГОН #{pred_id}\n━━━━━━━━━━━━━━━━━━━━━━\n📊 #{next_game} | {pred['suit']} | попытка {pred['attempt']+1}"
+                        message = f"🔄 ДОГОН #{pred_id}\n━━━━━━━━━━━━━━━━━━━━━━\n📊 #{next_game} | {pred['suit']} | попытка {pred['attempt']+1}"
                         send_to_channel(message)
 
 def handle_message(update: Update, context: CallbackContext):
@@ -268,17 +248,12 @@ def handle_message(update: Update, context: CallbackContext):
         game_num = game_data['game_num']
         storage.games[game_num] = game_data
         
-        # 1️⃣ ПАТТЕРНЫ
         check_pattern_confirmation(game_num, game_data)
-        
-        # 2️⃣ ПРОГНОЗЫ  
         check_predictions(game_num, game_data)
         
-        # 3️⃣ НОВЫЙ ПАТТЕРН (только НЕЧЕТНЫЕ)
         if game_data['first_suit']:
             check_pattern(game_num, game_data['first_suit'])
         
-        # Очистка
         if len(storage.games) > 200:
             oldest = min(storage.games)
             del storage.games[oldest]
@@ -296,20 +271,15 @@ def signal_handler(sig, frame):
 def main():
     global updater
     
-    # 🔒 LOCK
     if not acquire_lock():
         print("❌ Бот уже запущен!")
         sys.exit(1)
     
-    # 🧹 ОЧИСТКА
     clear_telegram_queue()
-    
-    # ✅ ТОКЕН
     if not check_bot_token():
         release_lock()
         sys.exit(1)
     
-    # 🛑 SIGNALS
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
     
@@ -317,8 +287,8 @@ def main():
     print("🤖 БОТ ПАТТЕРНОВ ✅")
     print(f"📡 Вход: {INPUT_CHANNEL_ID}")
     print(f"📤 Выход: {OUTPUT_CHANNEL_ID}")
-    print("🎯 Логика: 1189♠️→1192♠️→ПРОГНОЗ♣️ 1193")
-    print("✅ +3 вместо +2!")
+    print("🎯 Логика: 1166→1169→ПРОГНОЗ♦️ 1170")
+    print("✅ +3 вместо +2 + КРАСИВЫЙ формат!")
     print("="*60)
     
     max_retries = 3
