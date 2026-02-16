@@ -33,12 +33,12 @@ MAX_GAME_NUMBER = 1440
 # Масти
 SUITS = ["♥️", "♠️", "♣️", "♦️"]
 
-# НОВЫЕ ПРАВИЛА СМЕНЫ МАСТЕЙ
+# ПРАВИЛА СМЕНЫ МАСТЕЙ (Красные <-> Черные)
 SUIT_CHANGE_RULES = {
-    '♥️': '♦️',  # Черва -> Бубна
-    '♦️': '♥️',  # Бубна -> Черва
-    '♠️': '♣️',  # Пики -> Трефа
-    '♣️': '♠️'   # Трефа -> Пики
+    '♥️': '♣️',  # Черва (красная) -> Трефа (черная)
+    '♦️': '♠️',  # Бубна (красная) -> Пики (черная)
+    '♠️': '♦️',  # Пики (черная) -> Бубна (красная)
+    '♣️': '♥️'   # Трефа (черная) -> Черва (красная)
 }
 
 # Диапазоны для СОЗДАНИЯ паттернов (10-19, 30-39, 50-59 и т.д.)
@@ -221,15 +221,15 @@ def compare_suits(suit1, suit2):
     
     return s1 == s2
 
-async def check_predictions(game_num, game_data, context):
-    """Проверяет активные прогнозы (для ЛЮБЫХ игр, включая #R и #X)"""
+async def check_predictions(current_game_num, game_data, context):
+    """Проверяет активные прогнозы ТОЛЬКО когда пришла следующая игра"""
     logger.info(f"\n{'🔍'*30}")
-    logger.info(f"🔍 ПРОВЕРКА ПРОГНОЗОВ для игры #{game_num}")
+    logger.info(f"🔍 ПРОВЕРКА ПРОГНОЗОВ для игры #{current_game_num}")
     logger.info(f"{'🔍'*30}")
     
-    # Получаем все карты левой руки
+    # Получаем все карты левой руки текущей игры
     left_cards = game_data.get('all_suits', [])
-    logger.info(f"🃏 Карты левой руки: {left_cards}")
+    logger.info(f"🃏 Карты левой руки текущей игры #{current_game_num}: {left_cards}")
     
     # Показываем все активные прогнозы
     active_preds = [p for p in storage.predictions.values() if p['status'] == 'pending']
@@ -238,54 +238,66 @@ async def check_predictions(game_num, game_data, context):
     for pred_id, pred in list(storage.predictions.items()):
         if pred['status'] != 'pending':
             continue
-            
-        logger.info(f"\n🎯 Прогноз #{pred_id}: ищем масть {pred['suit']}")
-        logger.info(f"   Целевая игра: #{pred['target']}")
-        logger.info(f"   Проверочные игры: {pred['check_games']}")
-        logger.info(f"   Текущая попытка: {pred['attempt']}")
         
-        if game_num in pred['check_games']:
-            game_idx = pred['check_games'].index(game_num)
-            logger.info(f"   Игра #{game_num} в списке под индексом {game_idx}")
+        target_game = pred['target']
+        logger.info(f"\n🎯 Прогноз #{pred_id}: целевая игра #{target_game}, ищем масть {pred['suit']}")
+        
+        # Проверяем, является ли текущая игра следующей после целевой
+        if current_game_num == target_game + 1:
+            logger.info(f"✅ Игра #{current_game_num} - это следующая игра после целевой #{target_game}")
+            logger.info(f"   Значит, игра #{target_game} уже завершена и можно проверять результат")
             
-            if game_idx == pred['attempt']:
-                logger.info(f"   ✅ Это текущая попытка!")
-                
-                # Проверяем каждую карту
-                suit_found = False
-                found_positions = []
-                
-                for idx, card_suit in enumerate(left_cards):
-                    if compare_suits(pred['suit'], card_suit):
-                        suit_found = True
-                        found_positions.append(idx + 1)
-                        logger.info(f"   ✅✅✅ НАШЛИ в карте #{idx + 1}: {card_suit}")
-                
-                # Также проверяем теги (но они не должны заменять наличие масти)
-                has_r_tag = game_data.get('has_r_tag', False)
-                has_x_tag = game_data.get('has_x_tag', False)
-                has_check = game_data.get('has_check', False)
-                
+            # Получаем данные целевой игры из истории
+            target_game_data = storage.games.get(target_game)
+            
+            if not target_game_data:
+                logger.info(f"⚠️ Данные игры #{target_game} еще не сохранены, пропускаем")
+                continue
+            
+            target_cards = target_game_data.get('all_suits', [])
+            logger.info(f"🃏 Карты левой руки целевой игры #{target_game}: {target_cards}")
+            
+            # Проверяем наличие масти в целевой игре
+            suit_found = False
+            found_positions = []
+            
+            for idx, card_suit in enumerate(target_cards):
+                if compare_suits(pred['suit'], card_suit):
+                    suit_found = True
+                    found_positions.append(idx + 1)
+                    logger.info(f"   ✅✅✅ НАШЛИ в карте #{idx + 1} игры #{target_game}: {card_suit}")
+            
+            # Также проверяем теги в целевой игре
+            has_r_tag = target_game_data.get('has_r_tag', False)
+            has_x_tag = target_game_data.get('has_x_tag', False)
+            has_check = target_game_data.get('has_check', False)
+            
+            if suit_found or has_r_tag or has_x_tag or has_check:
                 if suit_found:
-                    logger.info(f"✅ ПРОГНОЗ #{pred_id} ВЫИГРАЛ! Нашли масть {pred['suit']} в картах {found_positions}")
-                    pred['status'] = 'win'
-                    pred['found_in_cards'] = found_positions
-                    storage.stats['wins'] += 1
-                    await update_prediction_result(pred, game_num, 'win', context)
+                    logger.info(f"✅ ПРОГНОЗ #{pred_id} ВЫИГРАЛ! Нашли масть {pred['suit']} в игре #{target_game}")
                 else:
-                    logger.info(f"❌ Масть {pred['suit']} не найдена в левой руке")
-                    
-                    # Проверяем, не последняя ли это попытка
-                    if pred['attempt'] >= len(pred['check_games']) - 1:
-                        logger.info(f"💔 Все попытки исчерпаны")
-                        pred['status'] = 'loss'
-                        storage.stats['losses'] += 1
-                        await update_prediction_result(pred, game_num, 'loss', context)
-                    else:
-                        pred['attempt'] += 1
-                        next_game = pred['check_games'][pred['attempt']]
-                        logger.info(f"🔄 Прогноз #{pred_id} переходит к догону {pred['attempt']}, следующая игра: #{next_game}")
-                        await update_prediction_message(pred, context)
+                    logger.info(f"✅ ПРОГНОЗ #{pred_id} ВЫИГРАЛ по тегу в игре #{target_game}!")
+                
+                pred['status'] = 'win'
+                pred['found_in_cards'] = found_positions
+                storage.stats['wins'] += 1
+                await update_prediction_result(pred, target_game, 'win', context)
+            else:
+                logger.info(f"❌ Масть {pred['suit']} не найдена в игре #{target_game}")
+                
+                # Проверяем, есть ли еще попытки (догоны)
+                if pred['attempt'] >= 2:  # Всего 3 попытки (0,1,2)
+                    logger.info(f"💔 Все попытки исчерпаны")
+                    pred['status'] = 'loss'
+                    storage.stats['losses'] += 1
+                    await update_prediction_result(pred, target_game, 'loss', context)
+                else:
+                    # Переходим к следующей попытке (догону)
+                    pred['attempt'] += 1
+                    # Сдвигаем целевую игру для догона
+                    pred['target'] = pred['check_games'][pred['attempt']]
+                    logger.info(f"🔄 Прогноз #{pred_id} переходит к догону {pred['attempt']}, новая целевая игра: #{pred['target']}")
+                    await update_prediction_message(pred, context)
 
 async def check_patterns(game_num, game_data, context):
     """Проверяет ожидающие паттерны и создает прогнозы (ТОЛЬКО для нужных диапазонов)"""
@@ -448,7 +460,7 @@ async def update_prediction_message(prediction, context):
         if not prediction.get('channel_message_id'):
             return
         
-        next_game = prediction['check_games'][prediction['attempt']]
+        next_game = prediction['target']
         
         text = (
             f"🔄 *BOT2 - ПРОГНОЗ #{prediction['id']} - ДОГОН {prediction['attempt']}*\n"
@@ -499,7 +511,7 @@ async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Сохраняем игру в историю (ВСЕГДА)
         storage.games[game_num] = game_data
         
-        # 1. СНАЧАЛА проверяем активные прогнозы (для ЛЮБЫХ игр, включая #R и #X)
+        # 1. Проверяем активные прогнозы
         await check_predictions(game_num, game_data, context)
         
         # 2. ПОТОМ проверяем паттерны и создаем новые прогнозы (только для нужных диапазонов)
@@ -533,17 +545,17 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     print("\n" + "="*60)
-    print("🤖 BOT2 (НОВЫЕ ПРАВИЛА) ЗАПУЩЕН")
+    print("🤖 BOT2 (КРАСНЫЕ <-> ЧЕРНЫЕ) ЗАПУЩЕН")
     print("="*60)
     print(f"✅ Диапазоны для создания паттернов: 10-19, 30-39, 50-59... до 1430-1439")
     print(f"✅ Всего диапазонов: {len(VALID_RANGES)}")
-    print("✅ ПРОВЕРЯЕТ ПРОГНОЗЫ для ВСЕХ игр (включая #R и #X)")
+    print("✅ ПРОВЕРЯЕТ ПРОГНОЗЫ ТОЛЬКО ПОСЛЕ ЗАВЕРШЕНИЯ ИГРЫ")
     print("✅ Анализирует ТОЛЬКО левую руку игрока")
-    print("✅ Новые правила смены мастей:")
-    print("   - Черва (♥️) -> Бубна (♦️)")
-    print("   - Бубна (♦️) -> Черва (♥️)")
-    print("   - Пики (♠️) -> Трефа (♣️)")
-    print("   - Трефа (♣️) -> Пики (♠️)")
+    print("✅ Правила смены мастей (Красные <-> Черные):")
+    print("   - Черва (♥️) -> Трефа (♣️)")
+    print("   - Бубна (♦️) -> Пики (♠️)")
+    print("   - Пики (♠️) -> Бубна (♦️)")
+    print("   - Трефа (♣️) -> Черва (♥️)")
     print("✅ Выходной канал: -1003855079501")
     print("="*60)
     
