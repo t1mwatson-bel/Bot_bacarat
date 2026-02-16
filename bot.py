@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 TOKEN = "5482422004:AAHXLYyZ-qoCsycse1k9Qt6YRi9jmB24B-k"
 INPUT_CHANNEL_ID = -1003469691743
 OUTPUT_CHANNEL_ID = -1003855079501
-BOT_USERNAME = "НЕЧЕТ→ЧЕТ v20.x"  # ✅ ИСПРАВЛЕНО
+BOT_USERNAME = "НЕЧЕТ→ЧЕТ v20.x"
 MAX_GAME_NUMBER = 1440
 
 # ✅ ТВОЙ ПОЛНЫЙ СПИСОК ДИАПАЗОНОВ
@@ -115,18 +115,18 @@ def parse_game_data(text: str) -> Dict:
     }
 
 # ====================== ✅ ИСПРАВЛЕННЫЕ ФУНКЦИИ ======================
-async def check_odd_even_patterns(game_num: int, game_ Dict, context: ContextTypes.DEFAULT_TYPE):
+async def check_odd_even_patterns(game_num: int, game_data: Dict, context: ContextTypes.DEFAULT_TYPE):
     """🔍 НЕЧЕТ→ЧЕТ паттерны"""
     logger.info(f"\n🔍 НЕЧЕТ→ЧЕТ #{game_num}")
     
-    first_suit = game_data.get('first_suit')  # ✅ ИСПРАВЛЕНО
+    first_suit = game_data.get('first_suit')
     if not first_suit:
         return
     
     # 1️⃣ ПРОВЕРКА паттерна в ЧЕТНОЙ игре
     if game_num % 2 == 0 and game_num in storage.patterns:
         pattern = storage.patterns[game_num]
-        all_suits = game_data['all_suits']  # ✅ ИСПРАВЛЕНО
+        all_suits = game_data['all_suits']
         
         suit_found = (
             (len(all_suits) >= 1 and compare_suits(pattern['suit'], all_suits[0])) or
@@ -166,9 +166,9 @@ async def check_odd_even_patterns(game_num: int, game_ Dict, context: ContextTyp
         }
         logger.info(f"📝 НЕЧЕТ#{game_num}({first_suit}) → ЧЕТ#{check_game}")
 
-async def check_odd_even_predictions(game_num: int, game_ Dict, context: ContextTypes.DEFAULT_TYPE):
+async def check_odd_even_predictions(game_num: int, game_data: Dict, context: ContextTypes.DEFAULT_TYPE):
     """🎯 Проверка НЕЧЕТ→ЧЕТ прогнозов"""
-    player_cards = game_data['all_suits']  # ✅ ИСПРАВЛЕНО
+    player_cards = game_data['all_suits']
     if not player_cards:
         return
     
@@ -185,7 +185,7 @@ async def check_odd_even_predictions(game_num: int, game_ Dict, context: Context
             logger.info(f"🎉 НЕЧЕТ→ЧЕТ #{pred_id} ЗАШЁЛ #{game_num}!")
             prediction['status'] = 'win'
             prediction['win_game'] = game_num
-            await send_odd_even_win(pred_id, prediction, game_data, context)  # ✅ context добавлен
+            await send_odd_even_win(pred_id, prediction, game_data, context)
             del storage.odd_even_predictions[pred_id]
         else:
             prediction['attempt'] += 1
@@ -196,7 +196,7 @@ async def check_odd_even_predictions(game_num: int, game_ Dict, context: Context
 # ====================== ✅ ИСПРАВЛЕННЫЕ ОТПРАВКИ ======================
 async def send_odd_even_prediction(prediction: Dict, context: ContextTypes.DEFAULT_TYPE):
     """🚀 НЕЧЕТ→ЧЕТ прогноз"""
-    pattern_suit = storage.patterns.get(prediction['pattern_game'], {}).get('suit', '?')  # ✅ ИСПРАВЛЕНО
+    pattern_suit = storage.patterns.get(prediction['pattern_game'], {}).get('suit', '?')
     
     message = (
         f"🎯 <b>НЕЧЕТ→ЧЕТ #{prediction['id']}</b>\n\n"
@@ -207,13 +207,13 @@ async def send_odd_even_prediction(prediction: Dict, context: ContextTypes.DEFAU
     )
     
     msg = await context.bot.send_message(
-        chat_id=OUTPUT_CHANNEL_ID,  # ✅ OUTPUT_CHANNEL_ID
+        chat_id=OUTPUT_CHANNEL_ID,
         text=message,
         parse_mode='HTML'
     )
     prediction['channel_message_id'] = msg.message_id
 
-async def send_odd_even_win(pred_id: int, prediction: Dict, game_ Dict, context: ContextTypes.DEFAULT_TYPE):
+async def send_odd_even_win(pred_id: int, prediction: Dict, game_data: Dict, context: ContextTypes.DEFAULT_TYPE):
     """✅ Выигрыш НЕЧЕТ→ЧЕТ"""
     message = (
         f"🎉 <b>✅ НЕЧЕТ→ЧЕТ #{pred_id} ВЫИГРЫШ!</b>\n\n"
@@ -230,7 +230,7 @@ async def handle_channel_message(update: Update, context: ContextTypes.DEFAULT_T
         text = update.channel_post.text or ""
         game_data = parse_game_data(text)
         
-        if game_  # ✅ ИСПРАВЛЕНО
+        if game_data:  # ✅ ИСПРАВЛЕНО
             game_num = game_data['game_num']
             logger.info(f"\n📥 #{game_num}: {game_data['all_suits']}")
             
@@ -253,7 +253,7 @@ async def main():
     
     application = Application.builder().token(TOKEN).build()
     application.add_handler(MessageHandler(
-        filters.Chat(chat_id=INPUT_CHANNEL_ID) & filters.TEXT,  # ✅ filters.TEXT
+        filters.Chat(chat_id=INPUT_CHANNEL_ID) & filters.TEXT,
         handle_channel_message
     ))
     
