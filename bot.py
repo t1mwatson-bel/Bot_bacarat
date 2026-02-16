@@ -111,6 +111,18 @@ def check_bot_token():
         logger.error(f"❌ Ошибка при проверке токена: {e}")
         return False
 
+def send_to_channel(text):
+    """Отправляет сообщение в выходной канал"""
+    try:
+        if updater and updater.bot:
+            updater.bot.send_message(
+                chat_id=OUTPUT_CHANNEL_ID,
+                text=text
+            )
+            logger.info(f"📤 Отправлено в канал: {text[:50]}...")
+    except Exception as e:
+        logger.error(f"❌ Ошибка отправки в канал: {e}")
+
 def is_valid_game(game_num):
     """Проверяет, входит ли игра в нужные диапазоны и нечетная ли она"""
     if game_num % 2 == 0:
@@ -290,6 +302,7 @@ def create_prediction(target_game, predicted_suit, source_game):
     message += f"┗ ⏱ {datetime.now().strftime('%H:%M:%S')}"
     
     logger.info(message)
+    send_to_channel(message)  # Отправляем в канал
 
 def check_predictions(game_num, game_data):
     """Проверяет активные прогнозы"""
@@ -318,7 +331,9 @@ def check_predictions(game_num, game_data):
                     message += f"┣ 🃏 Ожидаемая масть: {pred['suit']}\n"
                     message += f"┣ 📊 Статистика: {storage.stats['wins']}✅ | {storage.stats['losses']}❌\n"
                     message += f"┗ ⏱ {datetime.now().strftime('%H:%M:%S')}"
+                    
                     logger.info(message)
+                    send_to_channel(message)  # Отправляем в канал
                     
                 else:
                     logger.info(f"❌ Прогноз #{pred_id} не выиграл в игре #{game_num}")
@@ -337,7 +352,9 @@ def check_predictions(game_num, game_data):
                         message += f"┣ 🃏 Ожидаемая масть: {pred['suit']}\n"
                         message += f"┣ 📊 Статистика: {storage.stats['wins']}✅ | {storage.stats['losses']}❌\n"
                         message += f"┗ ⏱ {datetime.now().strftime('%H:%M:%S')}"
+                        
                         logger.info(message)
+                        send_to_channel(message)  # Отправляем в канал
                         
                     else:
                         # Переходим к следующему догону
@@ -351,7 +368,9 @@ def check_predictions(game_num, game_data):
                         message += f"┣ 🃏 Ожидаемая масть: {pred['suit']}\n"
                         message += f"┣ 🔄 Попытка: {pred['attempt'] + 1}/{len(pred['check_games'])}\n"
                         message += f"┗ ⏱ {datetime.now().strftime('%H:%M:%S')}"
+                        
                         logger.info(message)
+                        send_to_channel(message)  # Отправляем в канал
 
 def handle_message(update: Update, context: CallbackContext):
     """Обрабатывает входящие сообщения"""
