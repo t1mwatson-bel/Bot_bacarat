@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
 import logging
 import re
-import asyncio
 import time
 import sys
 import os
 import fcntl
 from datetime import datetime
 from collections import defaultdict
-from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
-from telegram.error import Conflict
 import requests
+
+# Импорты для старой версии python-telegram-bot
+from telegram import Update
+from telegram.ext import Updater, MessageHandler, Filters, CallbackContext
 
 # === НАСТРОЙКИ ===
 TOKEN = "5482422004:AAHXLYyZ-qoCsycse1k9Qt6YRi9jmB24B-k"
@@ -67,7 +67,7 @@ class GameStorage:
         self.prediction_counter = 0
 
 storage = GameStorage()
-application = None
+updater = None
 lock_fd = None
 
 def acquire_lock():
@@ -237,7 +237,7 @@ def print_update(pred_id, pred):
     next_game = pred['check_games'][pred['attempt']]
     logger.info(f"🔄 Прогноз #{pred_id} переходит к догону {pred['attempt']}, следующая игра: #{next_game}")
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_message(update: Update, context: CallbackContext):
     """Обрабатывает входящие сообщения"""
     try:
         if not update.channel_post:
@@ -315,38 +315,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"❌ Ошибка в handle_message: {e}")
 
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def error_handler(update: Update, context: CallbackContext):
     """Обрабатывает ошибки"""
     try:
-        if isinstance(context.error, Conflict):
-            logger.warning("⚠️ Обнаружен конфликт с другим экземпляром бота")
-            # Пробуем перезапуститься
-            await asyncio.sleep(5)
-            os._exit(1)  # Принудительный выход
-        else:
-            logger.error(f"❌ Ошибка: {context.error}")
+        logger.error(f"❌ Ошибка: {context.error}")
     except Exception as e:
         logger.error(f"❌ Ошибка в error_handler: {e}")
 
-async def shutdown():
-    """Graceful shutdown"""
-    logger.info("🛑 Завершение работы...")
-    release_lock()
-    if application:
-        await application.stop()
-    sys.exit(0)
-
-def signal_handler():
-    """Обработчик сигналов"""
-    asyncio.create_task(shutdown())
-
 def main():
-    global application
+    global updater
     
     print("\n" + "="*60)
     print("🤖 БОТ ДЛЯ АНАЛИЗА ПАТТЕРНОВ ЗАПУЩЕН")
     print("="*60)
-    print(f"✅ Версия Python: 3.13+")
+    print(f"✅ Версия Python: 3.11")
     print(f"✅ Токен бота: ...{TOKEN[-10:]}")
     print(f"✅ Отслеживаем только нечетные игры в {len(VALID_RANGES)} диапазонах")
     print("✅ Правила смены мастей:")
@@ -367,71 +349,57 @@ def main():
         release_lock()
         sys.exit(1)
     
-    # Создаем новый event loop
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
     max_retries = 3
     retry_count = 0
     
     while retry_count < max_retries:
         try:
-            # Создаем Application
-            application = Application.builder().token(TOKEN).build()
+            # Создаем Updater (для старой версии python-telegram-bot)
+            updater = Updater(token=TOKEN, use_context=True)
+            dp = updater.dispatcher
             
             # Добавляем обработчик ошибок
-            application.add_error_handler(error_handler)
+            dp.add_error_handler(error_handler)
             
             # Добавляем обработчик сообщений
-            application.add_handler(MessageHandler(
-                filters.Chat(INPUT_CHANNEL_ID) & filters.TEXT,
+            dp.add_handler(MessageHandler(
+                Filters.chat(INPUT_CHANNEL_ID) & Filters.text,
                 handle_message
             ))
             
             # Запускаем бота
             logger.info("🚀 Запуск бота...")
             
-            # Запускаем polling
-            loop.run_until_complete(application.initialize())
-            loop.run_until_complete(application.start())
-            loop.run_until_complete(application.updater.start_polling(
+            # Стартуем polling
+            updater.start_polling(
                 drop_pending_updates=True,
-                allowed_updates=['channel_post'],  # Только посты каналов
+                allowed_updates=['channel_post'],
                 poll_interval=1.0,
                 timeout=10
-            ))
+            )
             
             logger.info("✅ Бот успешно запущен и слушает канал")
             
             # Держим бота запущенным
-            loop.run_forever()
+            updater.idle()
             break
             
-        except Conflict:
+        except Exception as e:
+            logger.error(f"❌ Ошибка: {e}")
             retry_count += 1
-            logger.warning(f"⚠️ Конфликт при запуске. Попытка {retry_count}/{max_retries}")
             if retry_count < max_retries:
+                logger.info(f"🔄 Повторная попытка через 5 секунд... ({retry_count}/{max_retries})")
                 time.sleep(5)
             else:
                 logger.error("❌ Не удалось запустить бота после нескольких попыток")
+                if updater:
+                    updater.stop()
                 release_lock()
                 sys.exit(1)
-        except KeyboardInterrupt:
-            logger.info("🛑 Получен сигнал остановки")
-            break
-        except Exception as e:
-            logger.error(f"❌ Критическая ошибка: {e}")
-            release_lock()
-            sys.exit(1)
         finally:
-            # Останавливаем приложение
-            if application:
-                try:
-                    loop.run_until_complete(application.stop())
-                except:
-                    pass
+            if 'updater' in locals() and updater:
+                updater.stop()
             release_lock()
-            loop.close()
 
 if __name__ == "__main__":
     main()
