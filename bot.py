@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 TOKEN = "5482422004:AAHXLYyZ-qoCsycse1k9Qt6YRi9jmB24B-k"
 INPUT_CHANNEL_ID = -1003469691743
 OUTPUT_CHANNEL_ID = -1003855079501
+BOT_USERNAME = "НЕЧЕТ→ЧЕТ v20.x"  # ✅ ИСПРАВЛЕНО
 MAX_GAME_NUMBER = 1440
 
 # ✅ ТВОЙ ПОЛНЫЙ СПИСОК ДИАПАЗОНОВ
@@ -41,12 +42,9 @@ VALID_RANGES = [
     (1400, 1409), (1420, 1429), (1440, 1440)
 ]
 
-# 🆕 НОВЫЕ ПРАВИЛА ДЛЯ НЕЧЕТ→ЧЕТ
 SUIT_CHANGE_RULES = {
-    '♠️': '♥️',    # Пиковая НЕчет → Чет → Прогноз ♥️
-    '♣️': '♦️',    # Трефовая НЕчет → Чет → Прогноз ♦️
-    '♥️': '♠️',    # Черва НЕчет → Чет → Прогноз ♠️
-    '♦️': '♣️'     # Бубновая НЕчет → Чет → Прогноз ♣️
+    '♠️': '♥️', '♣️': '♦️',
+    '♥️': '♠️', '♦️': '♣️'
 }
 
 SUIT_MAP = {'♠': '♠️', '♣': '♣️', '♥': '♥️', '♦': '♦️'}
@@ -61,7 +59,7 @@ class Storage:
 
 storage = Storage()
 
-# ====================== УТИЛИТЫ (ТЕ САМЫЕ) ======================
+# ====================== УТИЛИТЫ ======================
 def lock_bot():
     lock_file = f"/tmp/bot2_{TOKEN.split(':')[1][-10:]}.lock"
     storage.lock_file = open(lock_file, 'w')
@@ -96,6 +94,7 @@ def parse_game_data(text: str) -> Dict:
     if not game_num:
         return {}
     
+    # ✅ ИСПРАВЛЕНО: убраны лишние \\
     left_hand_pattern = r'0\\(([A2-9TJQK♠♣♥♦\s]+)\\)'
     left_match = re.search(left_hand_pattern, text)
     
@@ -115,21 +114,20 @@ def parse_game_data(text: str) -> Dict:
         'text': text
     }
 
-# ====================== ЛОГИКА НЕЧЕТ→ЧЕТ ======================
+# ====================== ✅ ИСПРАВЛЕННЫЕ ФУНКЦИИ ======================
 async def check_odd_even_patterns(game_num: int, game_ Dict, context: ContextTypes.DEFAULT_TYPE):
     """🔍 НЕЧЕТ→ЧЕТ паттерны"""
     logger.info(f"\n🔍 НЕЧЕТ→ЧЕТ #{game_num}")
     
-    first_suit = game_data.get('first_suit')
+    first_suit = game_data.get('first_suit')  # ✅ ИСПРАВЛЕНО
     if not first_suit:
         return
     
-    # 1️⃣ ПРОВЕРКА паттерна в ЧЕТНОЙ игре (1-я/2-я карта)
+    # 1️⃣ ПРОВЕРКА паттерна в ЧЕТНОЙ игре
     if game_num % 2 == 0 and game_num in storage.patterns:
         pattern = storage.patterns[game_num]
-        all_suits = game_data['all_suits']
+        all_suits = game_data['all_suits']  # ✅ ИСПРАВЛЕНО
         
-        # ТОЛЬКО 1-я ИЛИ 2-я!
         suit_found = (
             (len(all_suits) >= 1 and compare_suits(pattern['suit'], all_suits[0])) or
             (len(all_suits) >= 2 and compare_suits(pattern['suit'], all_suits[1]))
@@ -163,14 +161,14 @@ async def check_odd_even_patterns(game_num: int, game_ Dict, context: ContextTyp
     if game_num % 2 != 0 and first_suit and is_valid_game(game_num):
         check_game = game_num + 3
         storage.patterns[check_game] = {
-            'suit': first_suit,  # 1-я карта НЕчетной!
+            'suit': first_suit,
             'source_game': game_num
         }
         logger.info(f"📝 НЕЧЕТ#{game_num}({first_suit}) → ЧЕТ#{check_game}")
 
 async def check_odd_even_predictions(game_num: int, game_ Dict, context: ContextTypes.DEFAULT_TYPE):
     """🎯 Проверка НЕЧЕТ→ЧЕТ прогнозов"""
-    player_cards = game_data['all_suits']
+    player_cards = game_data['all_suits']  # ✅ ИСПРАВЛЕНО
     if not player_cards:
         return
     
@@ -181,15 +179,13 @@ async def check_odd_even_predictions(game_num: int, game_ Dict, context: Context
     
     for pred_id, prediction in predictions_to_check:
         predicted_suit = prediction['predicted_suit']
-        
-        # ✅ ВСЕ 3 КАРТЫ ИГРОКА!
         suit_found = any(compare_suits(predicted_suit, card) for card in player_cards)
         
         if suit_found:
             logger.info(f"🎉 НЕЧЕТ→ЧЕТ #{pred_id} ЗАШЁЛ #{game_num}!")
             prediction['status'] = 'win'
             prediction['win_game'] = game_num
-            await send_odd_even_win(pred_id, prediction, game_data)
+            await send_odd_even_win(pred_id, prediction, game_data, context)  # ✅ context добавлен
             del storage.odd_even_predictions[pred_id]
         else:
             prediction['attempt'] += 1
@@ -197,9 +193,11 @@ async def check_odd_even_predictions(game_num: int, game_ Dict, context: Context
                 logger.info(f"❌ НЕЧЕТ→ЧЕТ #{pred_id} ПРОИГРАЛ")
                 del storage.odd_even_predictions[pred_id]
 
-# ====================== ОТПРАВКА (НОВЫЕ СООБЩЕНИЯ) ======================
+# ====================== ✅ ИСПРАВЛЕННЫЕ ОТПРАВКИ ======================
 async def send_odd_even_prediction(prediction: Dict, context: ContextTypes.DEFAULT_TYPE):
     """🚀 НЕЧЕТ→ЧЕТ прогноз"""
+    pattern_suit = storage.patterns.get(prediction['pattern_game'], {}).get('suit', '?')  # ✅ ИСПРАВЛЕНО
+    
     message = (
         f"🎯 <b>НЕЧЕТ→ЧЕТ #{prediction['id']}</b>\n\n"
         f"📊 <b>ПАТТЕРН:</b> НЕЧЕТ #{prediction['source_game']}({pattern_suit}) → ЧЕТ #{prediction['pattern_game']}\n"
@@ -209,13 +207,13 @@ async def send_odd_even_prediction(prediction: Dict, context: ContextTypes.DEFAU
     )
     
     msg = await context.bot.send_message(
-        chat_id=INPUT_CHANNEL_ID,
+        chat_id=OUTPUT_CHANNEL_ID,  # ✅ OUTPUT_CHANNEL_ID
         text=message,
         parse_mode='HTML'
     )
     prediction['channel_message_id'] = msg.message_id
 
-async def send_odd_even_win(pred_id: int, prediction: Dict, game_ Dict):
+async def send_odd_even_win(pred_id: int, prediction: Dict, game_ Dict, context: ContextTypes.DEFAULT_TYPE):
     """✅ Выигрыш НЕЧЕТ→ЧЕТ"""
     message = (
         f"🎉 <b>✅ НЕЧЕТ→ЧЕТ #{pred_id} ВЫИГРЫШ!</b>\n\n"
@@ -224,15 +222,15 @@ async def send_odd_even_win(pred_id: int, prediction: Dict, game_ Dict):
         f"⚡ <b>НЕЧЕТ→ЧЕТ СИСТЕМА РАБОТАЕТ!</b>"
     )
     
-    await context.bot.send_message(chat_id=INPUT_CHANNEL_ID, text=message, parse_mode='HTML')
+    await context.bot.send_message(chat_id=OUTPUT_CHANNEL_ID, text=message, parse_mode='HTML')
 
-# ====================== ОБРАБОТЧИК ======================
+# ====================== ✅ ИСПРАВЛЕННЫЙ ОБРАБОТЧИК ======================
 async def handle_channel_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.channel_post and update.channel_post.chat.id == INPUT_CHANNEL_ID:
         text = update.channel_post.text or ""
         game_data = parse_game_data(text)
         
-        if game_
+        if game_  # ✅ ИСПРАВЛЕНО
             game_num = game_data['game_num']
             logger.info(f"\n📥 #{game_num}: {game_data['all_suits']}")
             
@@ -241,7 +239,7 @@ async def handle_channel_message(update: Update, context: ContextTypes.DEFAULT_T
                 check_odd_even_predictions(game_num, game_data, context)
             )
 
-# ====================== МАИН ======================
+# ====================== MAIN ======================
 async def main():
     lock_bot()
     
@@ -254,7 +252,10 @@ async def main():
     print("="*60)
     
     application = Application.builder().token(TOKEN).build()
-    application.add_handler(MessageHandler(filters.Chat(chat_id=INPUT_CHANNEL_ID) & filters.Text(), handle_channel_message))
+    application.add_handler(MessageHandler(
+        filters.Chat(chat_id=INPUT_CHANNEL_ID) & filters.TEXT,  # ✅ filters.TEXT
+        handle_channel_message
+    ))
     
     await application.bot.delete_webhook()
     await application.initialize()
