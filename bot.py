@@ -6,7 +6,6 @@ import time
 import sys
 import os
 import fcntl
-import random
 import urllib.request
 import urllib.error
 import json
@@ -15,14 +14,13 @@ from collections import defaultdict
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 from telegram.error import Conflict
-import requests
 
 # === НАСТРОЙКИ ===
 TOKEN = "5482422004:AAHXLYyZ-qoCsycse1k9Qt6YRi9jmB24B-k"
 INPUT_CHANNEL_ID = -1003469691743
 OUTPUT_CHANNEL_ID = -1003855079501
 
-# Уникальные lock-файлы
+# Уникальный lock-файл
 LOCK_FILE_BOT1 = f'/tmp/bot1_combined_{TOKEN[-10:]}.lock'
 
 MAX_GAME_NUMBER = 1440
@@ -98,17 +96,22 @@ def release_lock():
             pass
 
 def check_bot_token():
-    """Проверка токена"""
+    """Проверка токена БЕЗ requests"""
     try:
         url = f"https://api.telegram.org/bot{TOKEN}/getMe"
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            bot_info = response.json()['result']
-            logger.info(f"✅ Бот @{bot_info['username']} авторизован")
-            return True
+        req = urllib.request.Request(url, method='GET')
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            if data.get('ok'):
+                bot_info = data['result']
+                logger.info(f"✅ Бот @{bot_info['username']} авторизован")
+                return True
+            else:
+                logger.error(f"❌ Ошибка авторизации: {data}")
+                return False
     except Exception as e:
-        logger.error(f"❌ Ошибка токена: {e}")
-    return False
+        logger.error(f"❌ Ошибка проверки токена: {e}")
+        return False
 
 def is_valid_game(game_num):
     """Проверка диапазона и нечетности"""
