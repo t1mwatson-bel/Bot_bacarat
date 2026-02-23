@@ -778,7 +778,7 @@ def compare_suits(s1, s2):
         return False
     return normalize_suit(s1) == normalize_suit(s2)
 
-# ======== ПРОВЕРКА ПРОГНОЗОВ (ИСПРАВЛЕННАЯ С #R) ========
+# ======== ПРОВЕРКА ПРОГНОЗОВ ========
 async def check_predictions(current_game_num, game_data, context):
     logger.info(f"\n🔍 ПРОВЕРКА ПРОГНОЗОВ (текущая игра #{current_game_num})")
     
@@ -806,7 +806,7 @@ async def check_predictions(current_game_num, game_data, context):
             has_r = target_data.get('has_r_tag', False)
             has_x = target_data.get('has_x_tag', False)
             
-            # ===== ИСПРАВЛЕННАЯ ЛОГИКА #R =====
+            # ЛОГИКА #R
             if has_r or has_x:
                 if suit_found:
                     # Масть есть - выигрыш, даже с #R
@@ -941,7 +941,7 @@ async def check_patterns(game_num, game_data, context):
                     'status': 'pending',
                     'created': datetime.now(),
                     'msg_id': None,
-                    'r_shifted': False  # <--- ДОБАВЛЕНО ПОЛЕ ДЛЯ #R
+                    'r_shifted': False
                 }
                 
                 storage.predictions[pred_id] = prediction
@@ -1129,6 +1129,7 @@ async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"   Теги: R={game_data['has_r_tag']}, X={game_data['has_x_tag']}")
         logger.info(f"   Стрелочка 👈: {game_data['player_draws']}")
         logger.info(f"   Игра полная: {game_data['is_complete']}")
+        logger.info(f"   Завершена (✅/🔰): {game_data['has_check'] or game_data['is_tie']}")
         logger.info(f"   Это редактирование: {is_edit}")
         
         # ЛОГИКА ОЖИДАНИЯ ТРЕТЬЕЙ КАРТЫ
@@ -1140,8 +1141,9 @@ async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Сохраняем финальную версию игры
             storage.games[game_num] = game_data
             
-            # Проверяем активные прогнозы
-            await check_predictions(game_num, game_data, context)
+            # Проверяем активные прогнозы ТОЛЬКО если игра завершена
+            if game_data.get('has_check') or game_data.get('is_tie'):
+                await check_predictions(game_num, game_data, context)
             
             # Если игра была в ожидании - удаляем
             if game_num in pending_games:
@@ -1177,8 +1179,12 @@ async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Сохраняем финальную версию
             storage.games[game_num] = game_data
             
-            # Проверяем прогнозы
-            await check_predictions(game_num, game_data, context)
+            # Проверяем прогнозы ТОЛЬКО если игра завершена (есть ✅ или 🔰)
+            if game_data.get('has_check') or game_data.get('is_tie'):
+                logger.info(f"🔍 Игра #{game_num} завершена, проверяем прогнозы")
+                await check_predictions(game_num, game_data, context)
+            else:
+                logger.info(f"⏳ Игра #{game_num} ещё не завершена (нет ✅/🔰), прогнозы не проверяем")
             
             # Отправляем в ML
             if mode:
@@ -1245,7 +1251,8 @@ def main():
     print("✅ Анализ последних 500 игр")
     print("✅ Ожидание третьей карты (👈)")
     print("✅ Обработка редактирований")
-    print("✅ #R переносится ТОЛЬКО ОДИН РАЗ (исправлено)")
+    print("✅ #R переносится ТОЛЬКО ОДИН РАЗ")
+    print("✅ Проверка прогнозов ТОЛЬКО по ✅ или 🔰")
     print("="*60)
     
     if not acquire_lock():
