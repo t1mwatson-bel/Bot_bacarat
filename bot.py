@@ -682,7 +682,7 @@ def parse_game_data(text):
     has_check = '✅' in text
     has_draw_arrow = '👉' in text or '👈' in text
     
-    # ===== НОВОЕ: Определяем, добирает ли игрок =====
+    # Определяем, добирает ли игрок
     player_draws = '👈' in text
     is_complete = not player_draws and '👉' not in text  # Нет стрелочек - игра полная
     
@@ -760,8 +760,8 @@ def parse_game_data(text):
         'has_x_tag': has_x_tag,
         'has_check': has_check,
         'has_draw_arrow': has_draw_arrow,
-        'player_draws': player_draws,  # НОВОЕ
-        'is_complete': is_complete,    # НОВОЕ
+        'player_draws': player_draws,
+        'is_complete': is_complete,
         'is_tie': is_tie,
         'mode': mode,
         'player_cards': player_cards,
@@ -778,7 +778,7 @@ def compare_suits(s1, s2):
         return False
     return normalize_suit(s1) == normalize_suit(s2)
 
-# ======== ПРОВЕРКА ПРОГНОЗОВ (С УЧЁТОМ #R) ========
+# ======== ПРОВЕРКА ПРОГНОЗОВ (ИСПРАВЛЕННАЯ С #R) ========
 async def check_predictions(current_game_num, game_data, context):
     logger.info(f"\n🔍 ПРОВЕРКА ПРОГНОЗОВ (текущая игра #{current_game_num})")
     
@@ -806,18 +806,44 @@ async def check_predictions(current_game_num, game_data, context):
             has_r = target_data.get('has_r_tag', False)
             has_x = target_data.get('has_x_tag', False)
             
+            # ===== ИСПРАВЛЕННАЯ ЛОГИКА #R =====
             if has_r or has_x:
                 if suit_found:
+                    # Масть есть - выигрыш, даже с #R
                     logger.info(f"✅ [{mode_name}] ПРОГНОЗ #{pred_id} ВЫИГРАЛ (несмотря на #R/#X)")
                     pred['status'] = 'win'
                     storage.stats[mode]['wins'] += 1
                     await update_prediction_result(pred, target, 'win', context, note="несмотря на #R")
-                else:
+                
+                elif not pred.get('r_shifted', False):
+                    # Первый #R без масти - переносим ТОЛЬКО ОДИН РАЗ
                     new_target = target + 2
-                    logger.info(f"⏭️ [{mode_name}] #R/#X без масти → перенос на #{new_target}")
+                    logger.info(f"⏭️ [{mode_name}] Первый #R без масти → перенос на #{new_target}")
                     pred['target'] = new_target
+                    pred['r_shifted'] = True  # Помечаем, что перенос уже был
                     await send_shift_notice(pred, target, new_target, context)
+                
+                else:
+                    # Второй #R подряд - обрабатываем как обычный прогноз
+                    logger.info(f"⚠️ [{mode_name}] Второй #R подряд, масти нет")
+                    if pred['attempt'] >= 2:
+                        pred['status'] = 'loss'
+                        storage.stats[mode]['losses'] += 1
+                        await update_prediction_result(pred, target, 'loss', context)
+                        
+                        # Регистрируем проигрыш в ML
+                        situation = storage.games.get(pred['source'], {})
+                        storage.ml_predictor.register_prediction_result(
+                            'suit', target, False, situation
+                        )
+                    else:
+                        pred['attempt'] += 1
+                        pred['target'] = pred['doggens'][pred['attempt']]
+                        logger.info(f"🔄 [{mode_name}] Догон {pred['attempt']}, новая цель #{pred['target']}")
+                        await update_prediction_message(pred, context)
+            
             else:
+                # Обычная игра без #R
                 if suit_found:
                     logger.info(f"✅ [{mode_name}] ПРОГНОЗ #{pred_id} ВЫИГРАЛ")
                     pred['status'] = 'win'
@@ -914,7 +940,8 @@ async def check_patterns(game_num, game_data, context):
                     'attempt': 0,
                     'status': 'pending',
                     'created': datetime.now(),
-                    'msg_id': None
+                    'msg_id': None,
+                    'r_shifted': False  # <--- ДОБАВЛЕНО ПОЛЕ ДЛЯ #R
                 }
                 
                 storage.predictions[pred_id] = prediction
@@ -1067,7 +1094,7 @@ async def daily_stats(context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
 
-# ======== ОБРАБОТЧИК НОВЫХ СООБЩЕНИЙ (ИСПРАВЛЕННЫЙ) ========
+# ======== ОБРАБОТЧИК НОВЫХ СООБЩЕНИЙ ========
 async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         message = None
@@ -1104,7 +1131,7 @@ async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"   Игра полная: {game_data['is_complete']}")
         logger.info(f"   Это редактирование: {is_edit}")
         
-        # ===== НОВАЯ ЛОГИКА ОЖИДАНИЯ ТРЕТЬЕЙ КАРТЫ =====
+        # ЛОГИКА ОЖИДАНИЯ ТРЕТЬЕЙ КАРТЫ
         
         # Если это редактирование - значит игра уже полная
         if is_edit:
@@ -1135,9 +1162,6 @@ async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             # Сохраняем в общее хранилище (но не проверяем прогнозы!)
             storage.games[game_num] = game_data
-            
-            # НЕ проверяем прогнозы
-            # НЕ отправляем в ML (подождём полную версию)
             
             return
         
@@ -1219,8 +1243,9 @@ def main():
     print("✅ БОТ 2: диапазоны 10-19,30-39... (♥️↔♣️, ♦️↔♠️)")
     print("✅ ML: 5 типов прогнозов с уверенностью >70%")
     print("✅ Анализ последних 500 игр")
-    print("✅ ИСПРАВЛЕНО: Ожидание третьей карты (👈)")
-    print("✅ ИСПРАВЛЕНО: Обработка редактирований")
+    print("✅ Ожидание третьей карты (👈)")
+    print("✅ Обработка редактирований")
+    print("✅ #R переносится ТОЛЬКО ОДИН РАЗ (исправлено)")
     print("="*60)
     
     if not acquire_lock():
