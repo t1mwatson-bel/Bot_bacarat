@@ -578,10 +578,20 @@ class GameStorage:
             'bot2': {'wins': 0, 'losses': 0}
         }
         self.prediction_counter = 0
-        self.ml_predictor = MLPredictor(history_size=500)  # ИНИЦИАЛИЗАЦИЯ ML
+        self.ml_predictor = MLPredictor(history_size=500)
 
 storage = GameStorage()
 lock_fd = None
+
+# ======== НОВАЯ СТРУКТУРА ДЛЯ ОЖИДАНИЯ ТРЕТЬЕЙ КАРТЫ ========
+class PendingGame:
+    def __init__(self, game_data, first_seen):
+        self.game_data = game_data
+        self.first_seen = first_seen
+        self.processed = False
+
+# Хранилище для игр, ожидающих третью карту
+pending_games = {}
 
 def get_bot_mode(game_num):
     """Определяет, по какому режиму играть (bot1 или bot2)"""
@@ -671,6 +681,11 @@ def parse_game_data(text):
     has_x_tag = '#X' in text or '#X🟡' in text
     has_check = '✅' in text
     has_draw_arrow = '👉' in text or '👈' in text
+    
+    # ===== НОВОЕ: Определяем, добирает ли игрок =====
+    player_draws = '👈' in text
+    is_complete = not player_draws and '👉' not in text  # Нет стрелочек - игра полная
+    
     is_tie = '🔰' in text
     
     left_part = extract_left_part(text)
@@ -685,7 +700,6 @@ def parse_game_data(text):
     # Определяем режим
     mode = get_bot_mode(game_num)
     
-    # ===== НОВЫЙ ПАРСИНГ ДЛЯ ML =====
     # Парсим карты игрока и банкира
     player_cards = []
     banker_cards = []
@@ -746,9 +760,10 @@ def parse_game_data(text):
         'has_x_tag': has_x_tag,
         'has_check': has_check,
         'has_draw_arrow': has_draw_arrow,
+        'player_draws': player_draws,  # НОВОЕ
+        'is_complete': is_complete,    # НОВОЕ
         'is_tie': is_tie,
         'mode': mode,
-        # НОВЫЕ ПОЛЯ
         'player_cards': player_cards,
         'banker_cards': banker_cards,
         'player_score': player_score,
@@ -816,7 +831,7 @@ async def check_predictions(current_game_num, game_data, context):
                         storage.stats[mode]['losses'] += 1
                         await update_prediction_result(pred, target, 'loss', context)
                         
-                        # ===== РЕГИСТРИРУЕМ ПРОИГРЫШ В ML =====
+                        # Регистрируем проигрыш в ML
                         situation = storage.games.get(pred['source'], {})
                         storage.ml_predictor.register_prediction_result(
                             'suit', target, False, situation
@@ -1052,14 +1067,18 @@ async def daily_stats(context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
 
-# ======== ОБРАБОТЧИК НОВЫХ СООБЩЕНИЙ ========
+# ======== ОБРАБОТЧИК НОВЫХ СООБЩЕНИЙ (ИСПРАВЛЕННЫЙ) ========
 async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         message = None
+        is_edit = False
+        
         if update.channel_post:
             message = update.channel_post
+            is_edit = False
         elif update.edited_channel_post:
             message = update.edited_channel_post
+            is_edit = True
         else:
             return
         
@@ -1068,7 +1087,7 @@ async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         logger.info(f"\n{'='*60}")
-        logger.info(f"📥 Получено: {text[:150]}...")
+        logger.info(f"📥 {'РЕДАКТИРОВАНИЕ' if is_edit else 'НОВОЕ'}: {text[:150]}...")
         
         game_data = parse_game_data(text)
         if not game_data:
@@ -1079,27 +1098,85 @@ async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mode_name = "БОТ 1" if mode == 'bot1' else ("БОТ 2" if mode else "НЕ ОПРЕДЕЛЕН")
         
         logger.info(f"📊 Игра #{game_num} ({mode_name})")
-        logger.info(f"   Карты: {game_data['all_suits']}")
+        logger.info(f"   Карты: {game_data['all_suits']} ({len(game_data['player_cards'])} карт)")
         logger.info(f"   Теги: R={game_data['has_r_tag']}, X={game_data['has_x_tag']}")
+        logger.info(f"   Стрелочка 👈: {game_data['player_draws']}")
+        logger.info(f"   Игра полная: {game_data['is_complete']}")
+        logger.info(f"   Это редактирование: {is_edit}")
         
-        storage.games[game_num] = game_data
+        # ===== НОВАЯ ЛОГИКА ОЖИДАНИЯ ТРЕТЬЕЙ КАРТЫ =====
         
-        # Проверяем активные прогнозы
-        await check_predictions(game_num, game_data, context)
+        # Если это редактирование - значит игра уже полная
+        if is_edit:
+            logger.info(f"✏️ Редактирование игры #{game_num} - проверяем")
+            
+            # Сохраняем финальную версию игры
+            storage.games[game_num] = game_data
+            
+            # Проверяем активные прогнозы
+            await check_predictions(game_num, game_data, context)
+            
+            # Если игра была в ожидании - удаляем
+            if game_num in pending_games:
+                del pending_games[game_num]
+            
+            # Отправляем в ML (только полные игры)
+            if mode:
+                await storage.ml_predictor.analyze_and_predict(game_data, context)
+            
+            return
         
-        # Создаем новые прогнозы (только если есть режим)
-        if mode:
-            await check_patterns(game_num, game_data, context)
+        # Если это новое сообщение с 👈 - игрок добирает
+        if game_data['player_draws']:
+            logger.info(f"⏳ Игра #{game_num}: игрок добирает (👈), ждём третью карту")
+            
+            # Сохраняем в очередь ожидания
+            pending_games[game_num] = PendingGame(game_data, datetime.now())
+            
+            # Сохраняем в общее хранилище (но не проверяем прогнозы!)
+            storage.games[game_num] = game_data
+            
+            # НЕ проверяем прогнозы
+            # НЕ отправляем в ML (подождём полную версию)
+            
+            return
         
-        # ===== НОВОЕ: ML анализ =====
-        if mode:
-            await storage.ml_predictor.analyze_and_predict(game_data, context)
+        # Если это новое сообщение без 👈 - возможно игра уже полная
+        if not game_data['player_draws']:
+            # Проверяем, не ждали ли мы эту игру
+            if game_num in pending_games:
+                logger.info(f"✅ Игра #{game_num}: получена полная версия (была в ожидании)")
+                del pending_games[game_num]
+            else:
+                logger.info(f"✅ Игра #{game_num}: полная версия сразу")
+            
+            # Сохраняем финальную версию
+            storage.games[game_num] = game_data
+            
+            # Проверяем прогнозы
+            await check_predictions(game_num, game_data, context)
+            
+            # Отправляем в ML
+            if mode:
+                await storage.ml_predictor.analyze_and_predict(game_data, context)
+            
+            # Создаем новые прогнозы (только если есть режим)
+            if mode:
+                await check_patterns(game_num, game_data, context)
         
-        # Очистка
+        # Очистка старых игр из очереди ожидания
+        current_time = datetime.now()
+        for pending_num in list(pending_games.keys()):
+            if pending_num < game_num - 20:  # Игры старше 20 номеров
+                logger.info(f"🧹 Очистка ожидания игры #{pending_num}")
+                del pending_games[pending_num]
+        
+        # Очистка старых игр из хранилища
         if len(storage.games) > 200:
             oldest = min(storage.games.keys())
             del storage.games[oldest]
         
+        # Очистка старых паттернов
         for check_game in list(storage.patterns.keys()):
             if check_game < game_num - 50:
                 del storage.patterns[check_game]
@@ -1117,6 +1194,22 @@ async def error_handler(update, context):
     except:
         pass
 
+# ======== ФОННАЯ ЗАДАЧА ДЛЯ ПРОВЕРКИ ЗАВИСШИХ ИГР ========
+async def check_stuck_games(context: ContextTypes.DEFAULT_TYPE):
+    """Периодически проверяет, не зависли ли игры в ожидании"""
+    current_time = datetime.now()
+    for game_num, pending in list(pending_games.items()):
+        # Если игра висит больше 2 минут - возможно, третьей карты не будет
+        if (current_time - pending.first_seen).seconds > 120:
+            logger.info(f"⏰ Игра #{game_num} зависла в ожидании >2 мин, проверяем")
+            
+            # Проверяем прогнозы по тому что есть
+            if game_num in storage.games:
+                await check_predictions(game_num, storage.games[game_num], context)
+            
+            # Удаляем из ожидания
+            del pending_games[game_num]
+
 # ======== MAIN ========
 def main():
     print("\n" + "="*60)
@@ -1126,6 +1219,8 @@ def main():
     print("✅ БОТ 2: диапазоны 10-19,30-39... (♥️↔♣️, ♦️↔♠️)")
     print("✅ ML: 5 типов прогнозов с уверенностью >70%")
     print("✅ Анализ последних 500 игр")
+    print("✅ ИСПРАВЛЕНО: Ожидание третьей карты (👈)")
+    print("✅ ИСПРАВЛЕНО: Обработка редактирований")
     print("="*60)
     
     if not acquire_lock():
@@ -1147,6 +1242,8 @@ def main():
     job_queue = app.job_queue
     if job_queue:
         job_queue.run_daily(daily_stats, time=time(23, 59, 0))
+        # Проверка зависших игр каждые 30 секунд
+        job_queue.run_repeating(check_stuck_games, interval=30, first=10)
     
     try:
         app.run_polling(
