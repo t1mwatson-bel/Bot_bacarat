@@ -124,7 +124,7 @@ class MLPredictor:
             'card_value': None,  # конкретная карта на столе
             'tie': None          # ничья
         }
-        self.confidence_threshold = 0.7  # 70%
+        self.confidence_threshold = 0.0  # <--- ИЗМЕНЕНО: 0% - отправляем всё
         
         # Статистика по прогнозам
         self.predictions_stats = {
@@ -137,7 +137,47 @@ class MLPredictor:
         
         # Загружаем модели если есть
         self.load_models()
+        self.load_history()  # <--- ДОБАВЛЕНО: загружаем историю
         
+    def save_history(self):
+        """Сохраняет историю игр в файл"""
+        try:
+            with open('ml_history.json', 'w', encoding='utf-8') as f:
+                # Преобразуем deque в список для сохранения
+                history_list = []
+                for game in self.history:
+                    # Преобразуем datetime в строку
+                    game_copy = game.copy()
+                    if 'timestamp' in game_copy and game_copy['timestamp']:
+                        game_copy['timestamp'] = game_copy['timestamp'].isoformat()
+                    history_list.append(game_copy)
+                json.dump(history_list, f, ensure_ascii=False, indent=2)
+            logger.info(f"ML: история сохранена ({len(self.history)} игр)")
+        except Exception as e:
+            logger.error(f"ML: ошибка сохранения истории: {e}")
+    
+    def load_history(self):
+        """Загружает историю игр из файла"""
+        try:
+            if os.path.exists('ml_history.json'):
+                with open('ml_history.json', 'r', encoding='utf-8') as f:
+                    history_list = json.load(f)
+                    # Восстанавливаем datetime
+                    for game in history_list:
+                        if 'timestamp' in game and game['timestamp']:
+                            try:
+                                game['timestamp'] = datetime.fromisoformat(game['timestamp'])
+                            except:
+                                game['timestamp'] = datetime.now()
+                    self.history = deque(history_list, maxlen=500)
+                logger.info(f"ML: загружено {len(self.history)} игр из файла")
+                
+                # Сразу обучаем модели на загруженной истории
+                if len(self.history) >= 20:
+                    self.train_models()
+        except Exception as e:
+            logger.error(f"ML: ошибка загрузки истории: {e}")
+    
     def add_game(self, game_data):
         """Добавляет игру в историю"""
         if not game_data:
@@ -147,6 +187,9 @@ class MLPredictor:
         ml_data = self.prepare_ml_data(game_data)
         self.history.append(ml_data)
         logger.info(f"ML: добавлена игра #{game_data['game_num']} в историю. Всего игр: {len(self.history)}")
+        
+        # Сохраняем историю после каждого добавления
+        self.save_history()
         
     def prepare_ml_data(self, game_data):
         """Превращает game_data в формат для ML"""
@@ -234,8 +277,8 @@ class MLPredictor:
             features.append(-1)
         
         # Добавляем признаки из предыдущих игр (тренды)
-        # Берем последние 10 игр
-        start_idx = max(0, index - 10)
+        # Берем последние 5 игр
+        start_idx = max(0, index - 5)
         for i in range(start_idx, index):
             past = list(self.history)[i]
             features.append(1 if past['winner'] == 'player' else 0)
@@ -255,8 +298,8 @@ class MLPredictor:
     
     def train_models(self):
         """Обучает модели на накопленной истории"""
-        if len(self.history) < 50:  # Уменьшил порог для теста
-            logger.info(f"ML: недостаточно данных для обучения (нужно минимум 50, есть {len(self.history)})")
+        if len(self.history) < 10:  # <--- УМЕНЬШЕНО: нужно минимум 10 игр
+            logger.info(f"ML: недостаточно данных для обучения (нужно минимум 10, есть {len(self.history)})")
             return False
         
         X = []
@@ -271,15 +314,16 @@ class MLPredictor:
                     if key in targets and targets[key] != -1:
                         y_dict[key].append(targets[key])
         
-        if len(X) < 30:
+        if len(X) < 5:  # <--- УМЕНЬШЕНО
             logger.info("ML: слишком мало примеров для обучения")
             return False
         
         X = np.array(X)
         
         # Обучаем каждую модель
+        models_trained = 0
         for target, y_list in y_dict.items():
-            if len(y_list) < 30:
+            if len(y_list) < 5:  # <--- УМЕНЬШЕНО
                 continue
             
             y = np.array(y_list)
@@ -287,28 +331,33 @@ class MLPredictor:
             # Выбираем модель в зависимости от цели
             if target in ['suit', 'player_win', 'tie', 'cards_count']:
                 model = RandomForestClassifier(
-                    n_estimators=50,
-                    max_depth=5,
+                    n_estimators=30,  # <--- УМЕНЬШЕНО
+                    max_depth=3,      # <--- УМЕНЬШЕНО
                     random_state=42
                 )
             else:  # card_value - регрессия
                 model = RandomForestRegressor(
-                    n_estimators=50,
-                    max_depth=5,
+                    n_estimators=30,  # <--- УМЕНЬШЕНО
+                    max_depth=3,      # <--- УМЕНЬШЕНО
                     random_state=42
                 )
             
-            model.fit(X[:len(y)], y)  # Обрезаем X до длины y
+            # Обрезаем X до длины y
+            X_trimmed = X[:len(y)]
+            model.fit(X_trimmed, y)
             self.models[target] = model
+            models_trained += 1
             logger.info(f"ML: модель {target} обучена на {len(y)} примерах")
         
-        self.save_models()
-        return True
+        if models_trained > 0:
+            self.save_models()
+            return True
+        return False
     
     def predict_next_game(self):
         """Предсказывает следующую игру"""
-        if len(self.history) < 10:  # Уменьшил порог для теста
-            logger.info(f"ML: недостаточно истории для прогноза (нужно минимум 10, есть {len(self.history)})")
+        if len(self.history) < 3:  # <--- УМЕНЬШЕНО
+            logger.info(f"ML: недостаточно истории для прогноза (нужно минимум 3, есть {len(self.history)})")
             return None
         
         # Берем последнюю игру как основу для прогноза
@@ -334,8 +383,8 @@ class MLPredictor:
         else:
             features.append(-1)
         
-        # Тренды за последние 5 игр (уменьшил для теста)
-        start_idx = max(0, len(self.history) - 6)
+        # Тренды за последние 3 игры
+        start_idx = max(0, len(self.history) - 4)
         for i in range(start_idx, len(self.history) - 1):
             past = list(self.history)[i]
             features.append(1 if past['winner'] == 'player' else 0)
@@ -358,19 +407,20 @@ class MLPredictor:
                     confidence = max(proba)
                 else:
                     pred = model.predict(X)[0]
-                    confidence = 0.7  # для регрессии
+                    confidence = 0.5  # для регрессии
                 
-                # Проверяем, не была ли такая ситуация опасной
-                if self.check_failure_pattern(last_game, target, pred):
-                    logger.info(f"ML: прогноз {target} отклонен (опасный паттерн)")
-                    continue
+                # <--- ОТКЛЮЧЕНО: проверка опасных паттернов
+                # if self.check_failure_pattern(last_game, target, pred):
+                #     logger.info(f"ML: прогноз {target} отклонен (опасный паттерн)")
+                #     continue
                 
-                if confidence >= self.confidence_threshold:
-                    predictions[target] = {
-                        'value': pred,
-                        'confidence': float(confidence)
-                    }
-                    logger.info(f"ML: прогноз {target} готов с уверенностью {confidence:.2f}")
+                # Отправляем всегда, без проверки на порог
+                predictions[target] = {
+                    'value': pred,
+                    'confidence': float(confidence)
+                }
+                logger.info(f"ML: прогноз {target} готов с уверенностью {confidence:.2f}")
+                
             except Exception as e:
                 logger.error(f"ML ошибка в {target}: {e}")
         
@@ -455,8 +505,8 @@ class MLPredictor:
         # Добавляем игру в историю
         self.add_game(game_data)
         
-        # Периодически обучаем модели (раз в 20 игр)
-        if len(self.history) % 20 == 0 and len(self.history) >= 50:
+        # Обучаем модели после каждой игры (для теста)
+        if len(self.history) >= 5:  # <--- ИЗМЕНЕНО
             self.train_models()
         
         # Делаем прогноз на следующую игру
@@ -465,7 +515,7 @@ class MLPredictor:
             logger.info("ML: нет прогнозов для отправки")
             return
         
-        logger.info(f"ML: получили {len(predictions)} прогнозов")
+        logger.info(f"ML: получили {len(predictions)} прогнозов: {list(predictions.keys())}")
         
         # Отправляем прогнозы
         next_game_num = game_data['game_num'] + 1
