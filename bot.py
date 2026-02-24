@@ -124,7 +124,7 @@ class MLPredictor:
             'card_value': None,  # конкретная карта на столе
             'tie': None          # ничья
         }
-        self.confidence_threshold = 0.0  # 0% - отправляем всё
+        self.confidence_threshold = 0.5  # 50% - только уверенные прогнозы
         
         # Статистика по прогнозам
         self.predictions_stats = {
@@ -426,11 +426,15 @@ class MLPredictor:
                     pred = model.predict(X)[0]
                     confidence = 0.5  # для регрессии
                 
-                predictions[target] = {
-                    'value': pred,
-                    'confidence': float(confidence)
-                }
-                logger.info(f"ML: прогноз {target} готов с уверенностью {confidence:.2f}")
+                # Проверка на порог 50%
+                if confidence >= self.confidence_threshold:
+                    predictions[target] = {
+                        'value': pred,
+                        'confidence': float(confidence)
+                    }
+                    logger.info(f"ML: прогноз {target} готов с уверенностью {confidence:.2f}")
+                else:
+                    logger.info(f"ML: прогноз {target} отклонен - уверенность {confidence:.2f} ниже 50%")
                 
             except Exception as e:
                 logger.error(f"ML ошибка в {target}: {e}")
@@ -659,12 +663,14 @@ class GameStorage:
     def __init__(self):
         self.games = {}
         self.patterns = {}  # ожидающие паттерны
-        self.predictions = {}  # активные прогнозы
+        self.predictions = {}  # активные прогнозы (только для БОТ 1 и БОТ 2)
+        self.ml_predictions = []  # <--- ДОБАВЛЕНО: храним ML прогнозы для проверки
         self.stats = {
             'bot1': {'wins': 0, 'losses': 0},
             'bot2': {'wins': 0, 'losses': 0}
         }
         self.prediction_counter = 0
+        self.ml_counter = 0  # <--- ДОБАВЛЕНО: счетчик для ML прогнозов
         self.ml_predictor = MLPredictor(history_size=500)
 
 storage = GameStorage()
@@ -867,9 +873,141 @@ def compare_suits(s1, s2):
         return False
     return normalize_suit(s1) == normalize_suit(s2)
 
-# ======== ПРОВЕРКА ПРОГНОЗОВ ========
+# ======== ПРОВЕРКА ML ПРОГНОЗОВ ========
+async def check_ml_predictions(current_game_num, game_data, context):
+    """Проверяет ML прогнозы"""
+    logger.info(f"\n🔍 ПРОВЕРКА ML ПРОГНОЗОВ (текущая игра #{current_game_num})")
+    
+    for ml_pred in list(storage.ml_predictions):
+        if ml_pred['status'] != 'pending':
+            continue
+        
+        target = ml_pred['target']
+        
+        if current_game_num == target + 1:
+            logger.info(f"✅ ML прогноз #{ml_pred['id']} на игру #{target} проверяем")
+            
+            target_data = storage.games.get(target)
+            if not target_data:
+                logger.warning(f"⚠️ Данные игры #{target} не найдены")
+                continue
+            
+            target_type = ml_pred['type']
+            predicted_value = ml_pred['value']
+            
+            # Проверяем в зависимости от типа прогноза
+            succeeded = False
+            
+            if target_type == 'suit':
+                # Проверка масти
+                target_cards = target_data.get('all_suits', [])
+                succeeded = any(compare_suits(predicted_value, s) for s in target_cards)
+                
+            elif target_type == 'player_win':
+                # Проверка победы игрока
+                real_winner = target_data.get('winner')
+                succeeded = (predicted_value == 1 and real_winner == 'player') or (predicted_value == 0 and real_winner != 'player')
+                
+            elif target_type == 'cards_count':
+                # Проверка количества карт
+                real_count = len(target_data.get('player_cards', []))
+                # predicted_value: 0 -> 2 карты, 1 -> 3 карты
+                predicted_count = 3 if predicted_value == 1 else 2
+                succeeded = (real_count == predicted_count)
+                
+            elif target_type == 'card_value':
+                # Проверка конкретной карты
+                if target_data.get('all_card_values'):
+                    # Берем первую карту на столе (обычно карта игрока)
+                    real_card = target_data['all_card_values'][0] if target_data['all_card_values'] else None
+                    if real_card:
+                        # Преобразуем обратно в число для сравнения
+                        real_card_num = storage.ml_predictor.card_to_number(real_card)
+                        succeeded = (real_card_num == predicted_value)
+                
+            elif target_type == 'tie':
+                # Проверка ничьей
+                real_winner = target_data.get('winner')
+                succeeded = (predicted_value == 1 and real_winner == 'tie') or (predicted_value == 0 and real_winner != 'tie')
+            
+            # Обновляем статус
+            if succeeded:
+                ml_pred['status'] = 'win'
+                logger.info(f"✅ ML прогноз #{ml_pred['id']} ({target_type}) ВЫИГРАЛ")
+            else:
+                ml_pred['status'] = 'loss'
+                logger.info(f"❌ ML прогноз #{ml_pred['id']} ({target_type}) НЕ ЗАШЁЛ")
+            
+            # Регистрируем результат в ML статистике
+            storage.ml_predictor.register_prediction_result(
+                target_type, target, succeeded, target_data
+            )
+            
+            # Отправляем сообщение о результате
+            await send_ml_result(ml_pred, target, succeeded, context)
+
+async def send_ml_result(ml_pred, game_num, succeeded, context):
+    """Отправляет результат ML прогноза"""
+    if not ml_pred.get('msg_id'):
+        return
+    
+    try:
+        moscow_tz = datetime.now(pytz.timezone('Europe/Moscow'))
+        time_str = moscow_tz.strftime('%H:%M:%S')
+        
+        if succeeded:
+            emoji = "✅"
+            status = "ЗАШЁЛ"
+        else:
+            emoji = "❌"
+            status = "НЕ ЗАШЁЛ"
+        
+        # Формируем текст в зависимости от типа
+        target_type = ml_pred['type']
+        value = ml_pred['value']
+        
+        if target_type == 'suit':
+            what = f"масть {value}"
+        elif target_type == 'player_win':
+            what = f"победа {'ИГРОК' if value == 1 else 'БАНКИР'}"
+        elif target_type == 'cards_count':
+            count = 3 if value == 1 else 2
+            what = f"у игрока {count} карты"
+        elif target_type == 'card_value':
+            card = storage.ml_predictor.number_to_card(int(value))
+            what = f"карта {card}"
+        elif target_type == 'tie':
+            what = f"ничья {'ДА' if value == 1 else 'НЕТ'}"
+        else:
+            what = "?"
+        
+        text = (
+            f"{emoji} *ML ПРОГНОЗ #{ml_pred['id']} {status}!*\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"📊 *ИСТОЧНИК:* #{ml_pred['source']}\n"
+            f"🎯 *ЦЕЛЬ:* #{ml_pred['target']}\n"
+            f"🔮 *ПРОГНОЗ:* {what}\n"
+            f"📈 *УВЕРЕННОСТЬ:* {int(ml_pred['confidence']*100)}%\n"
+            f"🎮 *ПРОВЕРЕНО В ИГРЕ:* #{game_num}\n\n"
+            f"📊 *СТАТИСТИКА:*\n"
+            f"• Похожих ситуаций: {storage.ml_predictor.predictions_stats[target_type]['total']}\n"
+            f"• Успешных: {storage.ml_predictor.predictions_stats[target_type]['success']}\n"
+            f"• Процент: {int(storage.ml_predictor.predictions_stats[target_type]['success']/max(1,storage.ml_predictor.predictions_stats[target_type]['total'])*100)}%\n\n"
+            f"⏱ {time_str} МСК"
+        )
+        
+        await context.bot.edit_message_text(
+            chat_id=OUTPUT_CHANNEL_ID,
+            message_id=ml_pred['msg_id'],
+            text=text,
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        logger.error(f"Ошибка отправки результата ML: {e}")
+
+# ======== ПРОВЕРКА ПРОГНОЗОВ БОТ 1/2 ========
 async def check_predictions(current_game_num, game_data, context):
-    logger.info(f"\n🔍 ПРОВЕРКА ПРОГНОЗОВ (текущая игра #{current_game_num})")
+    logger.info(f"\n🔍 ПРОВЕРКА ПРОГНОЗОВ БОТ 1/2 (текущая игра #{current_game_num})")
     
     for pred_id, pred in list(storage.predictions.items()):
         if pred['status'] != 'pending':
@@ -1162,6 +1300,14 @@ async def daily_stats(context: ContextTypes.DEFAULT_TYPE):
     percent1 = (stats_bot1['wins'] / total1 * 100) if total1 > 0 else 0
     percent2 = (stats_bot2['wins'] / total2 * 100) if total2 > 0 else 0
     
+    # Статистика ML
+    ml_stats = storage.ml_predictor.predictions_stats
+    ml_text = ""
+    for ml_type, ml_stat in ml_stats.items():
+        if ml_stat['total'] > 0:
+            ml_percent = (ml_stat['success'] / ml_stat['total'] * 100)
+            ml_text += f"• {ml_type}: {ml_stat['success']}✅ / {ml_stat['total'] - ml_stat['success']}❌ ({ml_percent:.1f}%)\n"
+    
     text = (
         f"📊 *СТАТИСТИКА ЗА {date_str}*\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -1173,6 +1319,8 @@ async def daily_stats(context: ContextTypes.DEFAULT_TYPE):
         f"✅ ВЫИГРЫШИ: {stats_bot2['wins']}\n"
         f"❌ ПРОИГРЫШИ: {stats_bot2['losses']}\n"
         f"📈 ПРОЦЕНТ: {percent2:.1f}%\n\n"
+        f"*ML ПРОГНОЗЫ*\n"
+        f"{ml_text}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"⏱ {time_str} МСК"
     )
@@ -1232,6 +1380,7 @@ async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             # Редактирование = игра завершена, проверяем ВСЕГДА
             await check_predictions(game_num, game_data, context)
+            await check_ml_predictions(game_num, game_data, context)  # <--- ДОБАВЛЕНО
             
             # Если игра была в ожидании - удаляем
             if game_num in pending_games:
@@ -1279,6 +1428,7 @@ async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if game_data.get('has_check') or game_data.get('has_green_square') or game_data.get('is_tie'):
                 logger.info(f"🔍 Игра #{game_num} завершена, проверяем прогнозы")
                 await check_predictions(game_num, game_data, context)
+                await check_ml_predictions(game_num, game_data, context)  # <--- ДОБАВЛЕНО
             else:
                 logger.info(f"⏳ Игра #{game_num} ещё не завершена (нет ✅/🟩/🔰), прогнозы не проверяем")
             
@@ -1332,6 +1482,7 @@ async def check_stuck_games(context: ContextTypes.DEFAULT_TYPE):
             # Проверяем прогнозы по тому что есть
             if game_num in storage.games:
                 await check_predictions(game_num, storage.games[game_num], context)
+                await check_ml_predictions(game_num, storage.games[game_num], context)  # <--- ДОБАВЛЕНО
             
             # Удаляем из ожидания
             del pending_games[game_num]
@@ -1346,7 +1497,8 @@ def main():
     print("✅ ML: 5 типов прогнозов (масть, победа, кол-во карт, карта, ничья)")
     print("✅ ML: сохраняет ВСЕ игры в историю (включая неполные)")
     print("✅ ML: обучается после 10 игр")
-    print("✅ ML: прогнозы даже с 0% уверенностью (для теста)")
+    print("✅ ML: прогнозы только при уверенности ≥50%")
+    print("✅ ML: проверяет результаты прогнозов")
     print("✅ Ожидание третьей карты (👈)")
     print("✅ Обработка редактирований")
     print("✅ #R переносится ТОЛЬКО ОДИН РАЗ")
