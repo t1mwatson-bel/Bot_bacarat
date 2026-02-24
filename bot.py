@@ -20,6 +20,33 @@ from telegram.ext import (
 )
 from telegram.error import Conflict
 
+# ======== НАСТРОЙКА ЛОГИРОВАНИЯ ДЛЯ RAILWAY ========
+class JsonFormatter(logging.Formatter):
+    """Форматтер логов в JSON для Railway"""
+    def format(self, record):
+        log_record = {
+            "message": record.getMessage(),
+            "level": record.levelname.lower(),
+            "timestamp": self.formatTime(record, "%Y-%m-%d %H:%M:%S"),
+            "name": record.name
+        }
+        # Добавляем исключение если есть
+        if record.exc_info:
+            log_record["exception"] = self.formatException(record.exc_info)
+        return json.dumps(log_record, ensure_ascii=False)
+
+# Настраиваем логирование
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# Создаем обработчик для stdout
+handler = logging.StreamHandler(sys.stdout)
+handler.setFormatter(JsonFormatter())
+logger.addHandler(handler)
+
+# Убираем стандартный обработчик если есть
+logging.getLogger().handlers.clear()
+
 # ======== ML ИМПОРТЫ ========
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
@@ -85,13 +112,6 @@ SUIT_RULES = {
         '♣️': '♥️'
     }
 }
-
-# ======== ЛОГГЕР ========
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
 
 # ======== ML ПРЕДИКТОР ========
 class MLPredictor:
@@ -1253,6 +1273,7 @@ def main():
     print("✅ Обработка редактирований")
     print("✅ #R переносится ТОЛЬКО ОДИН РАЗ")
     print("✅ Проверка прогнозов ТОЛЬКО по ✅ или 🔰")
+    print("✅ JSON логирование для Railway")
     print("="*60)
     
     if not acquire_lock():
