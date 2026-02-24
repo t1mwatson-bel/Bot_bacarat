@@ -23,6 +23,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
 from collections import Counter
+import random
 
 # ======== НАСТРОЙКА ЛОГИРОВАНИЯ ========
 class JsonFormatter(logging.Formatter):
@@ -53,7 +54,6 @@ from sklearn.ensemble import (
     GradientBoostingRegressor
 )
 from sklearn.svm import SVC
-from sklearn.neural_network import MLPClassifier, MLPRegressor
 import joblib
 import pytz
 
@@ -64,7 +64,7 @@ OUTPUT_CHANNEL_ID = -1003855079501
 
 LOCK_FILE = f'/tmp/ml_bot_{TOKEN[-10:]}.lock'
 
-# ======== ML ПРЕДИКТОР ========
+# ======== ML ПРЕДИКТОР С ПРИКОЛАМИ (БЕЗ НЕЙРОСЕТИ) ========
 class MLPredictor:
     def __init__(self, history_size=1000):
         self.history = deque(maxlen=history_size)
@@ -114,18 +114,17 @@ class MLPredictor:
         self.load_dangerous_patterns()
         
     def _create_ensemble(self, task_type):
+        """Создает ансамбль моделей БЕЗ нейросети"""
         if task_type == 'classifier':
             return {
                 'rf': RandomForestClassifier(n_estimators=50, max_depth=5, random_state=42),
                 'gb': GradientBoostingClassifier(n_estimators=50, max_depth=3, random_state=42),
-                'svm': SVC(probability=True, random_state=42),
-                'nn': MLPClassifier(hidden_layer_sizes=(50, 25), max_iter=500, random_state=42)
+                'svm': SVC(probability=True, random_state=42, max_iter=1000)
             }
         else:
             return {
                 'rf': RandomForestRegressor(n_estimators=50, max_depth=5, random_state=42),
-                'gb': GradientBoostingRegressor(n_estimators=50, max_depth=3, random_state=42),
-                'nn': MLPRegressor(hidden_layer_sizes=(50, 25), max_iter=500, random_state=42)
+                'gb': GradientBoostingRegressor(n_estimators=50, max_depth=3, random_state=42)
             }
     
     def _ensemble_predict(self, models_dict, X, task_type):
@@ -163,6 +162,78 @@ class MLPredictor:
             confidence = np.mean(probabilities)
         
         return final_pred, confidence
+    
+    # ======== МЕТОД С ПРИКОЛАМИ ========
+    def _get_funny_comment(self, comment_type, **kwargs):
+        """Возвращает ржачный комментарий"""
+        
+        jokes = {
+            'high_confidence': [
+                "🤓 Я прям чувствую на 100%!",
+                "⚡ Мои нейроны искрят - будет!",
+                "👨 Батя в казино так не был уверен!",
+                "🪑 Держись за стул, ща будет!"
+            ],
+            'low_confidence': [
+                "🐱 50/50... как кот Шрёдингера",
+                "🤷 Или будет, или нет. Я пас",
+                "☕ Гадание на кофейной гуще...",
+                "👨 Монетку подбросил, покажет"
+            ],
+            'suit': {
+                '♥️': ["♥️ Сердечки манят! Любовь на горизонте!"],
+                '♦️': ["♦️ Бабки, бабки, бабки!"],
+                '♠️': ["♠️ Черная полоса? Не, просто пика!"],
+                '♣️': ["♣️ Клевер! К удаче!"]
+            },
+            'value': {
+                'A': ["A 🃏 ТУЗ! Ты сегодня король!"],
+                'K': ["K 🤴 Король, но без короны!"],
+                'Q': ["Q 👸 Дама! Женская логика в деле!"],
+                'J': ["J 🧑 Валет - молодой, горячий!"],
+                '10': ["10 🔟 Десятка, как 10 из 10!"],
+                '9': ["9 Девятка - почти десятка!"]
+            },
+            'after_win': [
+                "🎉 Я ГЕНИЙ! Ставьте памятник!",
+                "😎 Кто тут красавчик? Я красавчик!"
+            ],
+            'after_loss': [
+                "👶 Ну бывает... я же только учусь!",
+                "💸 Казино выигрывает, я плачу!"
+            ],
+            'anomalies': [
+                "🧐 Однако... чет странное творится!",
+                "🤯 Такого даже я не ожидал!"
+            ]
+        }
+        
+        if comment_type == 'confidence':
+            confidence = kwargs.get('confidence', 0.5)
+            if confidence >= 0.7:
+                return random.choice(jokes['high_confidence'])
+            else:
+                return random.choice(jokes['low_confidence'])
+        
+        elif comment_type == 'suit':
+            suit = kwargs.get('suit', '♥️')
+            return random.choice(jokes['suit'].get(suit, jokes['suit']['♥️']))
+        
+        elif comment_type == 'value':
+            value = kwargs.get('value', 'A')
+            card = self.number_to_card(value)
+            return random.choice(jokes['value'].get(card, jokes['value']['A']))
+        
+        elif comment_type == 'win':
+            return random.choice(jokes['after_win'])
+        
+        elif comment_type == 'loss':
+            return random.choice(jokes['after_loss'])
+        
+        elif comment_type == 'anomaly':
+            return random.choice(jokes['anomalies'])
+        
+        return ""
     
     def save_history(self):
         try:
@@ -628,7 +699,8 @@ class MLPredictor:
                 self.last_suit = current_suit
             
             if self.suit_streak == 5:
-                anomalies.append(f"⚠️ 5 ИГР ПОДРЯД МАСТЬ {current_suit}!")
+                comment = self._get_funny_comment('anomaly')
+                anomalies.append(f"⚠️ 5 ИГР ПОДРЯД МАСТЬ {current_suit}! {comment}")
                 self.suit_streak = 0
         
         if game_data.get('winner') == 'player':
@@ -636,21 +708,25 @@ class MLPredictor:
             self.banker_win_streak = 0
             self.tie_streak = 0
             if self.player_win_streak == 8:
-                anomalies.append("🔥 8 ПОБЕД ИГРОКА ПОДРЯД!")
+                comment = self._get_funny_comment('anomaly')
+                anomalies.append(f"🔥 8 ПОБЕД ИГРОКА ПОДРЯД! {comment}")
             elif self.player_win_streak == 10:
-                anomalies.append("⚡ 10 ПОБЕД ИГРОКА ПОДРЯД!")
+                comment = self._get_funny_comment('anomaly')
+                anomalies.append(f"⚡ 10 ПОБЕД ИГРОКА ПОДРЯД! {comment}")
         elif game_data.get('winner') == 'banker':
             self.banker_win_streak += 1
             self.player_win_streak = 0
             self.tie_streak = 0
             if self.banker_win_streak == 8:
-                anomalies.append("🔥 8 ПОБЕД БАНКИРА ПОДРЯД!")
+                comment = self._get_funny_comment('anomaly')
+                anomalies.append(f"🔥 8 ПОБЕД БАНКИРА ПОДРЯД! {comment}")
         elif game_data.get('winner') == 'tie':
             self.tie_streak += 1
             self.player_win_streak = 0
             self.banker_win_streak = 0
             if self.tie_streak == 3:
-                anomalies.append("🤝 3 НИЧЬИ ПОДРЯД!")
+                comment = self._get_funny_comment('anomaly')
+                anomalies.append(f"🤝 3 НИЧЬИ ПОДРЯД! {comment}")
         
         for target in ['suit', 'value']:
             stats = self.predictions_stats[target]
@@ -660,7 +736,8 @@ class MLPredictor:
                     if failure:
                         recent_failures += 1
                 if recent_failures >= 8:
-                    anomalies.append(f"📉 ПАДЕНИЕ ТОЧНОСТИ {target.upper()}! 8/10 ошибок")
+                    comment = self._get_funny_comment('anomaly')
+                    anomalies.append(f"📉 ПАДЕНИЕ ТОЧНОСТИ {target.upper()}! 8/10 ошибок! {comment}")
         
         return anomalies
     
@@ -709,7 +786,7 @@ class MLPredictor:
         
         for target in ['suit', 'value']:
             for game_type in ['2cards', 'player3', 'banker3']:
-                for name in ['rf', 'gb', 'svm', 'nn']:
+                for name in ['rf', 'gb', 'svm']:
                     model_path = f'ml_models/{target}_{game_type}_{name}.pkl'
                     if os.path.exists(model_path) and name in self.models[target][game_type]:
                         try:
@@ -741,6 +818,7 @@ class MLPredictor:
         moscow_tz = pytz.timezone('Europe/Moscow')
         current_time = datetime.now(moscow_tz).strftime('%H:%M')
         next_time = (datetime.now(moscow_tz) + timedelta(minutes=1)).strftime('%H:%M')
+        current_hour = datetime.now(moscow_tz).hour
         
         for target_type, pred in predictions.items():
             self.prediction_counter += 1
@@ -748,9 +826,14 @@ class MLPredictor:
             
             doggens = [next_game_num, next_game_num + 1, next_game_num + 2]
             
+            time_joke = ""
+            confidence_joke = self._get_funny_comment('confidence', confidence=pred['confidence'])
+            
             if target_type == 'suit':
                 suit_map_rev = {0: '♥️', 1: '♦️', 2: '♠️', 3: '♣️'}
                 suit = suit_map_rev.get(int(pred['value']), '?')
+                suit_joke = self._get_funny_comment('suit', suit=suit)
+                
                 message = (
                     f"🎯 *ML ПРОГНОЗ #{pred_id}*\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -759,6 +842,7 @@ class MLPredictor:
                     f"🃏 *МАСТЬ:* {suit} (у игрока)\n"
                     f"📈 *УВЕРЕННОСТЬ:* {int(pred['confidence']*100)}%\n"
                     f"🎲 *ТИП ИГРЫ:* {pred.get('game_type', 'unknown')}\n\n"
+                    f"🗣 *КОММЕНТАРИЙ:* {confidence_joke} {suit_joke}\n\n"
                     f"🔄 *ДОГОНЫ:*\n"
                     f"• 1: #{doggens[1]}\n"
                     f"• 2: #{doggens[2]}\n\n"
@@ -766,12 +850,13 @@ class MLPredictor:
                     f"• Всего: {self.predictions_stats[target_type]['total']}\n"
                     f"• Успешно: {self.predictions_stats[target_type]['success']}\n"
                     f"• Процент: {int(self.predictions_stats[target_type]['success']/max(1,self.predictions_stats[target_type]['total'])*100)}%\n\n"
-                    f"⏱ {current_time} МСК\n\n"
-                    f"_ждём игру #{next_game_num}_"
+                    f"⏱ {current_time} МСК"
                 )
             
             elif target_type == 'value':
                 card = self.number_to_card(int(pred['value']))
+                value_joke = self._get_funny_comment('value', value=int(pred['value']))
+                
                 message = (
                     f"🎯 *ML ПРОГНОЗ #{pred_id}*\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -781,6 +866,7 @@ class MLPredictor:
                     f"📈 *УВЕРЕННОСТЬ:* {int(pred['confidence']*100)}%\n"
                     f"🎲 *ТИП ИГРЫ:* {pred.get('game_type', 'unknown')}\n"
                     f"✅ *НЕ БЫЛО В ПОСЛЕДНИХ 3 ИГРАХ*\n\n"
+                    f"🗣 *КОММЕНТАРИЙ:* {confidence_joke} {value_joke}\n\n"
                     f"🔄 *ДОГОНЫ:*\n"
                     f"• 1: #{doggens[1]}\n"
                     f"• 2: #{doggens[2]}\n\n"
@@ -788,8 +874,7 @@ class MLPredictor:
                     f"• Всего: {self.predictions_stats[target_type]['total']}\n"
                     f"• Успешно: {self.predictions_stats[target_type]['success']}\n"
                     f"• Процент: {int(self.predictions_stats[target_type]['success']/max(1,self.predictions_stats[target_type]['total'])*100)}%\n\n"
-                    f"⏱ {current_time} МСК\n\n"
-                    f"_ждём игру #{next_game_num}_"
+                    f"⏱ {current_time} МСК"
                 )
             
             try:
@@ -910,6 +995,7 @@ class MLPredictor:
                 f"🎯 *ЦЕЛЬ:* #{pred['target_game']}\n"
                 f"🔮 *ПРОГНОЗ:* {what}\n"
                 f"📈 *УВЕРЕННОСТЬ:* {int(pred['confidence']*100)}%\n\n"
+                f"🗣 *КОММЕНТАРИЙ:* Ну бывает... попытка {pred['attempt'] + 1}! 💪\n\n"
                 f"🔄 *СЛЕДУЮЩИЙ ДОГОН:* #{pred['target_game'] + 1}\n"
                 f"⏱ {time_str} МСК"
             )
@@ -935,9 +1021,11 @@ class MLPredictor:
             if succeeded:
                 emoji = "✅"
                 status = "ЗАШЁЛ"
+                joke = self._get_funny_comment('win')
             else:
                 emoji = "❌"
                 status = "НЕ ЗАШЁЛ"
+                joke = self._get_funny_comment('loss')
             
             if pred['type'] == 'suit':
                 suit_map_rev = {0: '♥️', 1: '♦️', 2: '♠️', 3: '♣️'}
@@ -965,6 +1053,7 @@ class MLPredictor:
                 f"📈 *УВЕРЕННОСТЬ:* {int(pred['confidence']*100)}%\n"
                 f"🔄 *ПОПЫТКА:* {attempt_names[pred['attempt']]}\n"
                 f"{result_info}\n\n"
+                f"🗣 *КОММЕНТАРИЙ:* {joke}\n\n"
                 f"📊 *СТАТИСТИКА ({pred['type']}):*\n"
                 f"• Всего: {total}\n"
                 f"• Успешно: {success}\n"
@@ -1337,7 +1426,6 @@ async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         game_num = game_data['game_num']
         
-        # ПРОСТОЕ ЛОГИРОВАНИЕ БЕЗ СЛОЖНЫХ F-СТРОК
         logger.info(f"📊 Игра #{game_num}")
         
         player_cards_str = []
@@ -1422,9 +1510,9 @@ async def check_stuck_games(context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     print("\n" + "="*60)
-    print("🤖 ВЕЛИКОЛЕПНЫЙ ML БОТ (ИСПРАВЛЕННАЯ ВЕРСИЯ)")
+    print("🤖 ВЕЛИКОЛЕПНЫЙ ML БОТ-КОМИК (ФИНАЛЬНАЯ ВЕРСИЯ)")
     print("="*60)
-    print("✅ АНСАМБЛЬ МОДЕЛЕЙ (RF, GB, SVM, NN)")
+    print("✅ АНСАМБЛЬ МОДЕЛЕЙ (RF, GB, SVM) - без капризной нейросети")
     print("✅ РАЗДЕЛЬНЫЕ МОДЕЛИ для 2 карт / добор игрока / добор банкира")
     print("✅ РАСШИРЕННЫЕ ПРИЗНАКИ (время, серии, комбинации)")
     print("✅ ДИНАМИЧЕСКИЙ ПОРОГ уверенности")
@@ -1435,6 +1523,7 @@ def main():
     print("✅ ПРЕДУПРЕЖДЕНИЯ ОБ АНОМАЛИЯХ")
     print("✅ ВИЗУАЛИЗАЦИЯ статистики (графики)")
     print("✅ Видит добор и игрока (👈) и банкира (👉)")
+    print("✅ 30+ РЖАЧНЫХ КОММЕНТАРИЕВ! 🎭")
     print("="*60)
     
     if not acquire_lock():
