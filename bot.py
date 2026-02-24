@@ -124,7 +124,7 @@ class MLPredictor:
             'card_value': None,  # конкретная карта на столе
             'tie': None          # ничья
         }
-        self.confidence_threshold = 0.0  # <--- ИЗМЕНЕНО: 0% - отправляем всё
+        self.confidence_threshold = 0.0  # 0% - отправляем всё
         
         # Статистика по прогнозам
         self.predictions_stats = {
@@ -137,7 +137,7 @@ class MLPredictor:
         
         # Загружаем модели если есть
         self.load_models()
-        self.load_history()  # <--- ДОБАВЛЕНО: загружаем историю
+        self.load_history()
         
     def save_history(self):
         """Сохраняет историю игр в файл"""
@@ -254,36 +254,44 @@ class MLPredictor:
         # Составляем вектор признаков из текущей игры
         features = []
         
-        # Счет
+        # Счет (3 признака)
         features.append(current['player_score'])
         features.append(current['banker_score'])
         features.append(current['player_score'] - current['banker_score'])
         
-        # Количество карт
+        # Количество карт (2 признака)
         features.append(current['player_cards_count'])
         features.append(current['banker_cards_count'])
         
-        # Победитель (one-hot)
+        # Победитель текущей игры (3 признака - one-hot)
         winner = current['winner']
         features.append(1 if winner == 'player' else 0)
         features.append(1 if winner == 'banker' else 0)
         features.append(1 if winner == 'tie' else 0)
         
-        # Масти (кодируем последнюю масть игрока)
+        # Масть последней карты игрока (1 признак)
         suit_map = {'♥️': 0, '♦️': 1, '♠️': 2, '♣️': 3}
         if current['player_suits']:
             features.append(suit_map.get(current['player_suits'][-1], -1))
         else:
             features.append(-1)
         
-        # Добавляем признаки из предыдущих игр (тренды)
-        # Берем последние 5 игр
-        start_idx = max(0, index - 5)
-        for i in range(start_idx, index):
-            past = list(self.history)[i]
-            features.append(1 if past['winner'] == 'player' else 0)
-            features.append(1 if past['winner'] == 'banker' else 0)
-            features.append(1 if past['winner'] == 'tie' else 0)
+        # Тренды - ВСЕГДА 5 предыдущих игр (по 3 признака = 15 признаков)
+        # Для первых игр, где нет истории, ставим нули
+        for offset in range(1, 6):  # всегда 5 предыдущих игр
+            if index - offset >= 0:
+                past = list(self.history)[index - offset]
+                features.append(1 if past['winner'] == 'player' else 0)
+                features.append(1 if past['winner'] == 'banker' else 0)
+                features.append(1 if past['winner'] == 'tie' else 0)
+            else:
+                # Если игры нет - добавляем нули
+                features.append(0)
+                features.append(0)
+                features.append(0)
+        
+        # Теперь features имеет фиксированную длину:
+        # 3 (счет) + 2 (кол-во карт) + 3 (победитель) + 1 (масть) + 15 (тренды) = 24 признака
         
         # Цели для разных моделей
         targets = {
@@ -298,7 +306,7 @@ class MLPredictor:
     
     def train_models(self):
         """Обучает модели на накопленной истории"""
-        if len(self.history) < 10:  # <--- УМЕНЬШЕНО: нужно минимум 10 игр
+        if len(self.history) < 10:
             logger.info(f"ML: недостаточно данных для обучения (нужно минимум 10, есть {len(self.history)})")
             return False
         
@@ -314,16 +322,17 @@ class MLPredictor:
                     if key in targets and targets[key] != -1:
                         y_dict[key].append(targets[key])
         
-        if len(X) < 5:  # <--- УМЕНЬШЕНО
+        if len(X) < 5:
             logger.info("ML: слишком мало примеров для обучения")
             return False
         
         X = np.array(X)
+        logger.info(f"ML: матрица признаков имеет форму {X.shape}")
         
         # Обучаем каждую модель
         models_trained = 0
         for target, y_list in y_dict.items():
-            if len(y_list) < 5:  # <--- УМЕНЬШЕНО
+            if len(y_list) < 5:
                 continue
             
             y = np.array(y_list)
@@ -331,14 +340,14 @@ class MLPredictor:
             # Выбираем модель в зависимости от цели
             if target in ['suit', 'player_win', 'tie', 'cards_count']:
                 model = RandomForestClassifier(
-                    n_estimators=30,  # <--- УМЕНЬШЕНО
-                    max_depth=3,      # <--- УМЕНЬШЕНО
+                    n_estimators=30,
+                    max_depth=3,
                     random_state=42
                 )
             else:  # card_value - регрессия
                 model = RandomForestRegressor(
-                    n_estimators=30,  # <--- УМЕНЬШЕНО
-                    max_depth=3,      # <--- УМЕНЬШЕНО
+                    n_estimators=30,
+                    max_depth=3,
                     random_state=42
                 )
             
@@ -356,7 +365,7 @@ class MLPredictor:
     
     def predict_next_game(self):
         """Предсказывает следующую игру"""
-        if len(self.history) < 3:  # <--- УМЕНЬШЕНО
+        if len(self.history) < 3:
             logger.info(f"ML: недостаточно истории для прогноза (нужно минимум 3, есть {len(self.history)})")
             return None
         
@@ -366,32 +375,43 @@ class MLPredictor:
         # Составляем признаки (как в training, но без цели)
         features = []
         
+        # Счет (3 признака)
         features.append(last_game['player_score'])
         features.append(last_game['banker_score'])
         features.append(last_game['player_score'] - last_game['banker_score'])
+        
+        # Количество карт (2 признака)
         features.append(last_game['player_cards_count'])
         features.append(last_game['banker_cards_count'])
         
+        # Победитель (3 признака)
         winner = last_game['winner']
         features.append(1 if winner == 'player' else 0)
         features.append(1 if winner == 'banker' else 0)
         features.append(1 if winner == 'tie' else 0)
         
+        # Масть (1 признак)
         suit_map = {'♥️': 0, '♦️': 1, '♠️': 2, '♣️': 3}
         if last_game['player_suits']:
             features.append(suit_map.get(last_game['player_suits'][-1], -1))
         else:
             features.append(-1)
         
-        # Тренды за последние 3 игры
-        start_idx = max(0, len(self.history) - 4)
-        for i in range(start_idx, len(self.history) - 1):
-            past = list(self.history)[i]
-            features.append(1 if past['winner'] == 'player' else 0)
-            features.append(1 if past['winner'] == 'banker' else 0)
-            features.append(1 if past['winner'] == 'tie' else 0)
+        # Тренды - ВСЕГДА 5 предыдущих игр
+        history_len = len(self.history)
+        for offset in range(1, 6):
+            if history_len - 1 - offset >= 0:
+                past = list(self.history)[history_len - 1 - offset]
+                features.append(1 if past['winner'] == 'player' else 0)
+                features.append(1 if past['winner'] == 'banker' else 0)
+                features.append(1 if past['winner'] == 'tie' else 0)
+            else:
+                features.append(0)
+                features.append(0)
+                features.append(0)
         
         X = np.array(features).reshape(1, -1)
+        logger.info(f"ML: вектор признаков для прогноза имеет длину {len(features)}")
         
         predictions = {}
         
@@ -409,12 +429,6 @@ class MLPredictor:
                     pred = model.predict(X)[0]
                     confidence = 0.5  # для регрессии
                 
-                # <--- ОТКЛЮЧЕНО: проверка опасных паттернов
-                # if self.check_failure_pattern(last_game, target, pred):
-                #     logger.info(f"ML: прогноз {target} отклонен (опасный паттерн)")
-                #     continue
-                
-                # Отправляем всегда, без проверки на порог
                 predictions[target] = {
                     'value': pred,
                     'confidence': float(confidence)
@@ -505,8 +519,8 @@ class MLPredictor:
         # Добавляем игру в историю
         self.add_game(game_data)
         
-        # Обучаем модели после каждой игры (для теста)
-        if len(self.history) >= 5:  # <--- ИЗМЕНЕНО
+        # Обучаем модели после каждой игры
+        if len(self.history) >= 5:
             self.train_models()
         
         # Делаем прогноз на следующую игру
@@ -1334,8 +1348,8 @@ def main():
     print("✅ БОТ 2: диапазоны 10-19,30-39... (♥️↔♣️, ♦️↔♠️)")
     print("✅ ML: 5 типов прогнозов (масть, победа, кол-во карт, карта, ничья)")
     print("✅ ML: сохраняет ВСЕ игры в историю (включая неполные)")
-    print("✅ ML: обучается после 50 игр")
-    print("✅ ML: прогнозы при уверенности >70%")
+    print("✅ ML: обучается после 10 игр")
+    print("✅ ML: прогнозы даже с 0% уверенностью (для теста)")
     print("✅ Ожидание третьей карты (👈)")
     print("✅ Обработка редактирований")
     print("✅ #R переносится ТОЛЬКО ОДИН РАЗ")
