@@ -700,6 +700,7 @@ def parse_game_data(text):
     has_r_tag = '#R' in text
     has_x_tag = '#X' in text or '#X🟡' in text
     has_check = '✅' in text
+    has_green_square = '🟩' in text  # <--- ДОБАВЛЕНО
     has_draw_arrow = '👉' in text or '👈' in text
     
     # Определяем, добирает ли игрок
@@ -779,6 +780,7 @@ def parse_game_data(text):
         'has_r_tag': has_r_tag,
         'has_x_tag': has_x_tag,
         'has_check': has_check,
+        'has_green_square': has_green_square,  # <--- ДОБАВЛЕНО
         'has_draw_arrow': has_draw_arrow,
         'player_draws': player_draws,
         'is_complete': is_complete,
@@ -1149,7 +1151,7 @@ async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"   Теги: R={game_data['has_r_tag']}, X={game_data['has_x_tag']}")
         logger.info(f"   Стрелочка 👈: {game_data['player_draws']}")
         logger.info(f"   Игра полная: {game_data['is_complete']}")
-        logger.info(f"   Завершена (✅/🔰): {game_data['has_check'] or game_data['is_tie']}")
+        logger.info(f"   Завершена (✅/🟩/🔰): {game_data['has_check'] or game_data['has_green_square'] or game_data['is_tie']}")  # <--- ИСПРАВЛЕНО
         logger.info(f"   Это редактирование: {is_edit}")
         
         # ЛОГИКА ОЖИДАНИЯ ТРЕТЬЕЙ КАРТЫ
@@ -1162,7 +1164,7 @@ async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
             storage.games[game_num] = game_data
             
             # Проверяем активные прогнозы ТОЛЬКО если игра завершена
-            if game_data.get('has_check') or game_data.get('is_tie'):
+            if game_data.get('has_check') or game_data.get('has_green_square') or game_data.get('is_tie'):  # <--- ИСПРАВЛЕНО
                 await check_predictions(game_num, game_data, context)
             
             # Если игра была в ожидании - удаляем
@@ -1203,12 +1205,12 @@ async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Сохраняем финальную версию
             storage.games[game_num] = game_data
             
-            # Проверяем прогнозы ТОЛЬКО если игра завершена (есть ✅ или 🔰)
-            if game_data.get('has_check') or game_data.get('is_tie'):
+            # Проверяем прогнозы ТОЛЬКО если игра завершена (есть ✅ или 🟩 или 🔰)
+            if game_data.get('has_check') or game_data.get('has_green_square') or game_data.get('is_tie'):  # <--- ИСПРАВЛЕНО
                 logger.info(f"🔍 Игра #{game_num} завершена, проверяем прогнозы")
                 await check_predictions(game_num, game_data, context)
             else:
-                logger.info(f"⏳ Игра #{game_num} ещё не завершена (нет ✅/🔰), прогнозы не проверяем")
+                logger.info(f"⏳ Игра #{game_num} ещё не завершена (нет ✅/🟩/🔰), прогнозы не проверяем")
             
             # Отправляем в ML
             if mode:
@@ -1276,8 +1278,8 @@ def main():
     print("✅ Ожидание третьей карты (👈)")
     print("✅ Обработка редактирований")
     print("✅ #R переносится ТОЛЬКО ОДИН РАЗ")
-    print("✅ Проверка прогнозов ТОЛЬКО по ✅ или 🔰")
-    print("✅ Паттерны создаются на ЛЮБОЙ игре (без проверки ✅/🔰)")
+    print("✅ Проверка прогнозов по ✅, 🟩 или 🔰")
+    print("✅ Паттерны создаются на ЛЮБОЙ игре")
     print("✅ JSON логирование для Railway")
     print("="*60)
     
