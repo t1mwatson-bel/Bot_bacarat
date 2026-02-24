@@ -146,6 +146,7 @@ class MLPredictor:
         # Подготавливаем данные для ML
         ml_data = self.prepare_ml_data(game_data)
         self.history.append(ml_data)
+        logger.info(f"ML: добавлена игра #{game_data['game_num']} в историю. Всего игр: {len(self.history)}")
         
     def prepare_ml_data(self, game_data):
         """Превращает game_data в формат для ML"""
@@ -254,8 +255,8 @@ class MLPredictor:
     
     def train_models(self):
         """Обучает модели на накопленной истории"""
-        if len(self.history) < 100:
-            logger.info("ML: недостаточно данных для обучения (нужно минимум 100 игр)")
+        if len(self.history) < 50:  # Уменьшил порог для теста
+            logger.info(f"ML: недостаточно данных для обучения (нужно минимум 50, есть {len(self.history)})")
             return False
         
         X = []
@@ -270,7 +271,7 @@ class MLPredictor:
                     if key in targets and targets[key] != -1:
                         y_dict[key].append(targets[key])
         
-        if len(X) < 50:
+        if len(X) < 30:
             logger.info("ML: слишком мало примеров для обучения")
             return False
         
@@ -278,7 +279,7 @@ class MLPredictor:
         
         # Обучаем каждую модель
         for target, y_list in y_dict.items():
-            if len(y_list) < 50:
+            if len(y_list) < 30:
                 continue
             
             y = np.array(y_list)
@@ -306,7 +307,8 @@ class MLPredictor:
     
     def predict_next_game(self):
         """Предсказывает следующую игру"""
-        if len(self.history) < 2:
+        if len(self.history) < 10:  # Уменьшил порог для теста
+            logger.info(f"ML: недостаточно истории для прогноза (нужно минимум 10, есть {len(self.history)})")
             return None
         
         # Берем последнюю игру как основу для прогноза
@@ -332,8 +334,8 @@ class MLPredictor:
         else:
             features.append(-1)
         
-        # Тренды за последние 10 игр
-        start_idx = max(0, len(self.history) - 11)
+        # Тренды за последние 5 игр (уменьшил для теста)
+        start_idx = max(0, len(self.history) - 6)
         for i in range(start_idx, len(self.history) - 1):
             past = list(self.history)[i]
             features.append(1 if past['winner'] == 'player' else 0)
@@ -368,6 +370,7 @@ class MLPredictor:
                         'value': pred,
                         'confidence': float(confidence)
                     }
+                    logger.info(f"ML: прогноз {target} готов с уверенностью {confidence:.2f}")
             except Exception as e:
                 logger.error(f"ML ошибка в {target}: {e}")
         
@@ -452,14 +455,17 @@ class MLPredictor:
         # Добавляем игру в историю
         self.add_game(game_data)
         
-        # Периодически обучаем модели (раз в 50 игр)
-        if len(self.history) % 50 == 0 and len(self.history) >= 100:
+        # Периодически обучаем модели (раз в 20 игр)
+        if len(self.history) % 20 == 0 and len(self.history) >= 50:
             self.train_models()
         
         # Делаем прогноз на следующую игру
         predictions = self.predict_next_game()
         if not predictions:
+            logger.info("ML: нет прогнозов для отправки")
             return
+        
+        logger.info(f"ML: получили {len(predictions)} прогнозов")
         
         # Отправляем прогнозы
         next_game_num = game_data['game_num'] + 1
@@ -494,13 +500,13 @@ class MLPredictor:
                 )
             
             elif target_type == 'player_win':
-                result = "ИГРОК" if pred['value'] == 1 else "НЕ ИГРОК"
+                result = "ИГРОК" if pred['value'] == 1 else "БАНКИР"
                 message = (
                     f"🎯 ПРОГНОЗ БОТА (ML)\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
                     f"📊 ИСТОЧНИК: #{game_data['game_num']} ({current_time} МСК)\n"
                     f"🎯 ЦЕЛЬ: #{next_game_num} ({next_time} МСК)\n"
-                    f"💪 ЧТО: Победа {result}\n"
+                    f"💪 ЧТО: Победит {result}\n"
                     f"📈 УВЕРЕННОСТЬ: {int(pred['confidence']*100)}%\n\n"
                     f"📊 АНАЛИЗ ПОСЛЕДНИХ {len(self.history)} ИГР:\n"
                     f"• Похожих ситуаций: {self.predictions_stats[target_type]['total']}\n"
@@ -554,13 +560,13 @@ class MLPredictor:
                 )
             
             elif target_type == 'tie':
-                result = "ДА" if pred['value'] == 1 else "НЕТ"
+                result = "НИЧЬЯ" if pred['value'] == 1 else "НЕ НИЧЬЯ"
                 message = (
                     f"🎯 ПРОГНОЗ БОТА (ML)\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
                     f"📊 ИСТОЧНИК: #{game_data['game_num']} ({current_time} МСК)\n"
                     f"🎯 ЦЕЛЬ: #{next_game_num} ({next_time} МСК)\n"
-                    f"🤝 ЧТО: Ничья - {result}\n"
+                    f"🤝 ЧТО: {result}\n"
                     f"📈 УВЕРЕННОСТЬ: {int(pred['confidence']*100)}%\n\n"
                     f"📊 АНАЛИЗ ПОСЛЕДНИХ {len(self.history)} ИГР:\n"
                     f"• Похожих ситуаций: {self.predictions_stats[target_type]['total']}\n"
@@ -700,7 +706,7 @@ def parse_game_data(text):
     has_r_tag = '#R' in text
     has_x_tag = '#X' in text or '#X🟡' in text
     has_check = '✅' in text
-    has_green_square = '🟩' in text  # <--- ДОБАВЛЕНО
+    has_green_square = '🟩' in text
     has_draw_arrow = '👉' in text or '👈' in text
     
     # Определяем, добирает ли игрок
@@ -780,7 +786,7 @@ def parse_game_data(text):
         'has_r_tag': has_r_tag,
         'has_x_tag': has_x_tag,
         'has_check': has_check,
-        'has_green_square': has_green_square,  # <--- ДОБАВЛЕНО
+        'has_green_square': has_green_square,
         'has_draw_arrow': has_draw_arrow,
         'player_draws': player_draws,
         'is_complete': is_complete,
@@ -1151,27 +1157,26 @@ async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"   Теги: R={game_data['has_r_tag']}, X={game_data['has_x_tag']}")
         logger.info(f"   Стрелочка 👈: {game_data['player_draws']}")
         logger.info(f"   Игра полная: {game_data['is_complete']}")
-        logger.info(f"   Завершена (✅/🟩/🔰): {game_data['has_check'] or game_data['has_green_square'] or game_data['is_tie']}")  # <--- ИСПРАВЛЕНО
+        logger.info(f"   Завершена (✅/🟩/🔰): {game_data['has_check'] or game_data['has_green_square'] or game_data['is_tie']}")
         logger.info(f"   Это редактирование: {is_edit}")
         
         # ЛОГИКА ОЖИДАНИЯ ТРЕТЬЕЙ КАРТЫ
         
         # Если это редактирование - значит игра уже полная
         if is_edit:
-            logger.info(f"✏️ Редактирование игры #{game_num} - проверяем")
+            logger.info(f"✏️ Редактирование игры #{game_num} - проверяем прогнозы")
             
             # Сохраняем финальную версию игры
             storage.games[game_num] = game_data
             
-            # Проверяем активные прогнозы ТОЛЬКО если игра завершена
-            if game_data.get('has_check') or game_data.get('has_green_square') or game_data.get('is_tie'):  # <--- ИСПРАВЛЕНО
-                await check_predictions(game_num, game_data, context)
+            # Редактирование = игра завершена, проверяем ВСЕГДА
+            await check_predictions(game_num, game_data, context)
             
             # Если игра была в ожидании - удаляем
             if game_num in pending_games:
                 del pending_games[game_num]
             
-            # Отправляем в ML (только полные игры)
+            # Отправляем в ML (сохраняем игру в историю)
             if mode:
                 await storage.ml_predictor.analyze_and_predict(game_data, context)
             
@@ -1184,10 +1189,14 @@ async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Сохраняем в очередь ожидания
             pending_games[game_num] = PendingGame(game_data, datetime.now())
             
-            # Сохраняем в общее хранилище (но не проверяем прогнозы!)
+            # Сохраняем в общее хранилище
             storage.games[game_num] = game_data
             
-            # СОЗДАЕМ НОВЫЕ ПРОГНОЗЫ (паттерны создаются по первой карте, даже если игра не завершена)
+            # СОХРАНЯЕМ В ML ДАЖЕ НЕПОЛНУЮ ИГРУ (для истории)
+            if mode:
+                await storage.ml_predictor.analyze_and_predict(game_data, context)
+            
+            # СОЗДАЕМ НОВЫЕ ПРОГНОЗЫ (паттерны создаются по первой карте)
             if mode:
                 await check_patterns(game_num, game_data, context)
             
@@ -1206,17 +1215,17 @@ async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
             storage.games[game_num] = game_data
             
             # Проверяем прогнозы ТОЛЬКО если игра завершена (есть ✅ или 🟩 или 🔰)
-            if game_data.get('has_check') or game_data.get('has_green_square') or game_data.get('is_tie'):  # <--- ИСПРАВЛЕНО
+            if game_data.get('has_check') or game_data.get('has_green_square') or game_data.get('is_tie'):
                 logger.info(f"🔍 Игра #{game_num} завершена, проверяем прогнозы")
                 await check_predictions(game_num, game_data, context)
             else:
                 logger.info(f"⏳ Игра #{game_num} ещё не завершена (нет ✅/🟩/🔰), прогнозы не проверяем")
             
-            # Отправляем в ML
+            # СОХРАНЯЕМ В ML
             if mode:
                 await storage.ml_predictor.analyze_and_predict(game_data, context)
             
-            # СОЗДАЕМ НОВЫЕ ПРОГНОЗЫ (паттерны создаются по первой карте, даже если игра не завершена)
+            # СОЗДАЕМ НОВЫЕ ПРОГНОЗЫ
             if mode:
                 await check_patterns(game_num, game_data, context)
         
@@ -1273,8 +1282,10 @@ def main():
     print("="*60)
     print("✅ БОТ 1: диапазоны 1-9,20-29... (♥️↔♦️, ♠️↔♣️)")
     print("✅ БОТ 2: диапазоны 10-19,30-39... (♥️↔♣️, ♦️↔♠️)")
-    print("✅ ML: 5 типов прогнозов с уверенностью >70%")
-    print("✅ Анализ последних 500 игр")
+    print("✅ ML: 5 типов прогнозов (масть, победа, кол-во карт, карта, ничья)")
+    print("✅ ML: сохраняет ВСЕ игры в историю (включая неполные)")
+    print("✅ ML: обучается после 50 игр")
+    print("✅ ML: прогнозы при уверенности >70%")
     print("✅ Ожидание третьей карты (👈)")
     print("✅ Обработка редактирований")
     print("✅ #R переносится ТОЛЬКО ОДИН РАЗ")
