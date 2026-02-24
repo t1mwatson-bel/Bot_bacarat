@@ -193,37 +193,37 @@ class MLPredictor:
         
     def prepare_ml_data(self, game_data):
         """Превращает game_data в формат для ML"""
-    # Извлекаем все признаки
-    features = {
-        'game_num': game_data['game_num'],
-        'player_score': game_data.get('player_score', 0),
-        'banker_score': game_data.get('banker_score', 0),
-        'player_cards_count': len(game_data.get('player_cards', [])),
-        'banker_cards_count': len(game_data.get('banker_cards', [])),
-        'winner': game_data.get('winner'),
-        'total_sum': game_data.get('total_sum', 0),
-        'timestamp': game_data.get('timestamp'),
-        'has_r': game_data.get('has_r_tag', False),
-        'has_x': game_data.get('has_x_tag', False)
-    }
-    
-    # Добавляем масти игрока (оставляем как есть)
-    player_suits = [c['suit'] for c in game_data.get('player_cards', [])]
-    features['player_suits'] = player_suits
-    
-    # Добавляем значения карт игрока - ТЕПЕРЬ КАК ЧИСЛА!
-    player_values = [self.card_to_number(c['value']) for c in game_data.get('player_cards', [])]
-    features['player_values'] = player_values
-    
-    # Добавляем все карты на столе - ТЕПЕРЬ КАК ЧИСЛА!
-    all_cards = []
-    for c in game_data.get('player_cards', []):
-        all_cards.append(self.card_to_number(c['value']))
-    for c in game_data.get('banker_cards', []):
-        all_cards.append(self.card_to_number(c['value']))
-    features['all_card_values'] = all_cards
-    
-    return features
+        # Извлекаем все признаки
+        features = {
+            'game_num': game_data['game_num'],
+            'player_score': game_data.get('player_score', 0),
+            'banker_score': game_data.get('banker_score', 0),
+            'player_cards_count': len(game_data.get('player_cards', [])),
+            'banker_cards_count': len(game_data.get('banker_cards', [])),
+            'winner': game_data.get('winner'),
+            'total_sum': game_data.get('total_sum', 0),
+            'timestamp': game_data.get('timestamp'),
+            'has_r': game_data.get('has_r_tag', False),
+            'has_x': game_data.get('has_x_tag', False)
+        }
+        
+        # Добавляем масти игрока (оставляем как есть)
+        player_suits = [c['suit'] for c in game_data.get('player_cards', [])]
+        features['player_suits'] = player_suits
+        
+        # Добавляем значения карт игрока - ТЕПЕРЬ КАК ЧИСЛА!
+        player_values = [self.card_to_number(c['value']) for c in game_data.get('player_cards', [])]
+        features['player_values'] = player_values
+        
+        # Добавляем все карты на столе - ТЕПЕРЬ КАК ЧИСЛА!
+        all_cards = []
+        for c in game_data.get('player_cards', []):
+            all_cards.append(self.card_to_number(c['value']))
+        for c in game_data.get('banker_cards', []):
+            all_cards.append(self.card_to_number(c['value']))
+        features['all_card_values'] = all_cards
+        
+        return features
 
 # ======== ХРАНИЛИЩЕ ========
 class GameStorage:
