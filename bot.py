@@ -192,7 +192,7 @@ class MLPredictor:
         self.save_history()
         
     def prepare_ml_data(self, game_data):
-    """Превращает game_data в формат для ML"""
+        """Превращает game_data в формат для ML"""
     # Извлекаем все признаки
     features = {
         'game_num': game_data['game_num'],
