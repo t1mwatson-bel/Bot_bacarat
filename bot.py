@@ -1185,6 +1185,10 @@ async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Сохраняем в общее хранилище (но не проверяем прогнозы!)
             storage.games[game_num] = game_data
             
+            # СОЗДАЕМ НОВЫЕ ПРОГНОЗЫ (паттерны создаются по первой карте, даже если игра не завершена)
+            if mode:
+                await check_patterns(game_num, game_data, context)
+            
             return
         
         # Если это новое сообщение без 👈 - возможно игра уже полная
@@ -1210,7 +1214,7 @@ async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if mode:
                 await storage.ml_predictor.analyze_and_predict(game_data, context)
             
-            # Создаем новые прогнозы (только если есть режим)
+            # СОЗДАЕМ НОВЫЕ ПРОГНОЗЫ (паттерны создаются по первой карте, даже если игра не завершена)
             if mode:
                 await check_patterns(game_num, game_data, context)
         
@@ -1273,6 +1277,7 @@ def main():
     print("✅ Обработка редактирований")
     print("✅ #R переносится ТОЛЬКО ОДИН РАЗ")
     print("✅ Проверка прогнозов ТОЛЬКО по ✅ или 🔰")
+    print("✅ Паттерны создаются на ЛЮБОЙ игре (без проверки ✅/🔰)")
     print("✅ JSON логирование для Railway")
     print("="*60)
     
