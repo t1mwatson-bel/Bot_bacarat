@@ -1437,8 +1437,7 @@ async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         game_num = game_data['game_num']
         
-        logger.info(f"📊 Игра #{game_num}")
-        logger.info(f"   Карты игрока: {[f'{c["value"]}{c["suit"]}' for c in game_data['player_cards']]}")
+        logger.info(f"   Карты игрока: {[f'{c['value']}{c['suit']}' for c in game_data['player_cards']]}")
         logger.info(f"   Карты банкира: {[f'{c["value"]}{c["suit"]}' for c in game_data['banker_cards']]}")
         logger.info(f"   Теги: R={game_data['has_r_tag']}, X={game_data['has_x_tag']}")
         logger.info(f"   Добор: игрок {'👈' if game_data['player_draws'] else 'нет'}, банкир {'👉' if game_data['banker_draws'] else 'нет'}")
