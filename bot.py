@@ -1003,28 +1003,28 @@ class MLPredictor:
             confidence_joke = self._get_funny_comment('confidence', confidence=pred['confidence'])
             
             if target_type == 'suit':
-                suit_map_rev = {0: '♥️', 1: '♦️', 2: '♠️', 3: '♣️'}
-                suit = suit_map_rev.get(int(pred['value']), '?')
-                suit_joke = self._get_funny_comment('suit', suit=suit')
-                
-                message = (
-                    f"🎯 *ML ПРОГНОЗ #{pred_id}*\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                    f"📊 *ИСТОЧНИК:* #{game_data['game_num']} ({current_time} МСК)\n"
-                    f"🎯 *ЦЕЛЬ:* #{next_game_num} ({next_time} МСК)\n"
-                    f"🃏 *МАСТЬ:* {suit} (у игрока)\n"
-                    f"📈 *УВЕРЕННОСТЬ:* {int(pred['confidence']*100)}%\n"
-                    f"🎲 *ТИП ИГРЫ:* {pred.get('game_type', 'unknown')}\n\n"
-                    f"🗣 *КОММЕНТАРИЙ:* {confidence_joke} {suit_joke}\n\n"
-                    f"🔄 *ДОГОНЫ:*\n"
-                    f"• 1: #{doggens[1]}\n"
-                    f"• 2: #{doggens[2]}\n\n"
-                    f"📊 *СТАТИСТИКА:*\n"
-                    f"• Всего: {self.predictions_stats[target_type]['total']}\n"
-                    f"• Успешно: {self.predictions_stats[target_type]['success']}\n"
-                    f"• Процент: {int(self.predictions_stats[target_type]['success']/max(1,self.predictions_stats[target_type]['total'])*100)}%\n\n"
-                    f"⏱ {current_time} МСК"
-                )
+    suit_map_rev = {0: '♥️', 1: '♦️', 2: '♠️', 3: '♣️'}
+    suit = suit_map_rev.get(int(pred['value']), '?')
+    suit_joke = self._get_funny_comment('suit', suit=suit)  # <--- ИСПРАВЛЕНО (убрал лишнюю кавычку)
+    
+    message = (
+        f"🎯 *ML ПРОГНОЗ #{pred_id}*\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📊 *ИСТОЧНИК:* #{game_data['game_num']} ({current_time} МСК)\n"
+        f"🎯 *ЦЕЛЬ:* #{next_game_num} ({next_time} МСК)\n"
+        f"🃏 *МАСТЬ:* {suit} (у игрока)\n"
+        f"📈 *УВЕРЕННОСТЬ:* {int(pred['confidence']*100)}%\n"
+        f"🎲 *ТИП ИГРЫ:* {pred.get('game_type', 'unknown')}\n\n"
+        f"🗣 *КОММЕНТАРИЙ:* {confidence_joke} {suit_joke}\n\n"
+        f"🔄 *ДОГОНЫ:*\n"
+        f"• 1: #{doggens[1]}\n"
+        f"• 2: #{doggens[2]}\n\n"
+        f"📊 *СТАТИСТИКА:*\n"
+        f"• Всего: {self.predictions_stats[target_type]['total']}\n"
+        f"• Успешно: {self.predictions_stats[target_type]['success']}\n"
+        f"• Процент: {int(self.predictions_stats[target_type]['success']/max(1,self.predictions_stats[target_type]['total'])*100)}%\n\n"
+        f"⏱ {current_time} МСК"
+    )
             
             elif target_type == 'value':
                 card = self.number_to_card(int(pred['value']))
