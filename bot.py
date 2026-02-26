@@ -65,7 +65,7 @@ OUTPUT_CHANNEL_ID = -1003855079501
 
 LOCK_FILE = f'/tmp/ml_bot_{TOKEN[-10:]}.lock'
 
-# ======== НОВЫЙ КЛАСС ДЛЯ УПРАВЛЕНИЯ ЧАСТОТОЙ ========
+# ======== КЛАСС ДЛЯ УПРАВЛЕНИЯ ЧАСТОТОЙ ========
 class RateLimiter:
     """Ограничивает частоту прогнозов"""
     def __init__(self, max_predictions=3, time_window=600):  # 3 прогноза за 10 минут (600 сек)
@@ -79,20 +79,16 @@ class RateLimiter:
         """Проверяет, можно ли отправить прогноз сейчас"""
         current_time = time_module.time()
         
-        # Если нет истории - можно
         if len(self.predictions_history) == 0:
             self.consecutive_predictions = 1
             return True
         
-        # Проверяем, не слишком ли часто
         time_since_last = current_time - self.last_prediction_time
         
-        # Минимум 3 минуты между прогнозами (180 секунд)
         if time_since_last < 180:
             logger.info(f"⏳ Слишком рано для прогноза. Прошло всего {time_since_last:.0f} сек, нужно минимум 180")
             return False
         
-        # Проверяем, не превышен ли лимит за последние 10 минут
         self.predictions_history.append(current_time)
         recent_predictions = [t for t in self.predictions_history if current_time - t <= self.time_window]
         
@@ -108,31 +104,24 @@ class RateLimiter:
         """Возвращает следующий тип прогноза (чередование)"""
         types = ['suit', 'value']
         
-        # Если были последовательные прогнозы одного типа
         if self.consecutive_predictions >= 2:
             self.consecutive_predictions = 0
-            # Принудительно меняем тип
             return 'value' if last_type == 'suit' else 'suit'
         
-        # Простое чередование
         return 'value' if last_type == 'suit' else 'suit'
     
     def should_skip_game(self, game_data):
         """Анализирует, стоит ли пропустить эту игру"""
-        # Пропускаем, если игра нечетная и т.д. (настраивается)
         if game_data.get('is_tie'):
-            # После ничьей пропускаем 1 игру
-            return random.random() < 0.7  # 70% шанс пропустить
+            return random.random() < 0.7
         
-        # Если счет сильно разный - подумать
         score_diff = abs(game_data.get('player_score', 0) - game_data.get('banker_score', 0))
         if score_diff >= 8:
-            # Разгром - пропускаем с вероятностью 50%
             return random.random() < 0.5
         
         return False
 
-# ======== НОВЫЙ КЛАСС ДЛЯ РАЗНЫХ СТРАТЕГИЙ ДОГОНА ========
+# ======== КЛАСС ДЛЯ РАЗНЫХ СТРАТЕГИЙ ДОГОНА ========
 class DogonStrategy:
     """Разные стратегии догона для разных типов прогнозов"""
     
@@ -143,34 +132,30 @@ class DogonStrategy:
         """
         base_target = game_situation.get('target_game', 0)
         
-        # Стратегии для разных типов
         strategies = {
             'suit': {
                 'normal': [base_target, base_target + 1, base_target + 2],
-                'conservative': [base_target, base_target + 2, base_target + 4],  # Для редких мастей
-                'aggressive': [base_target, base_target + 1, base_target + 1]     # Для частых мастей
+                'conservative': [base_target, base_target + 2, base_target + 4],
+                'aggressive': [base_target, base_target + 1, base_target + 1]
             },
             'value': {
-                'normal': [base_target, base_target + 2, base_target + 4],        # Значения ждем дольше
+                'normal': [base_target, base_target + 2, base_target + 4],
                 'conservative': [base_target, base_target + 3, base_target + 6],
                 'aggressive': [base_target, base_target + 1, base_target + 3]
             }
         }
         
-        # Анализируем ситуацию
         situation = game_situation.get('situation', 'normal')
         
-        # Если была ничья - особый случай
         if game_situation.get('was_tie'):
-            return [base_target, base_target + 3, base_target + 6]  # После ничьей пауза
+            return [base_target, base_target + 3, base_target + 6]
         
-        # Если предыдущий прогноз не зашел
         if game_situation.get('previous_failed'):
-            return [base_target, base_target + 2, base_target + 3]  # Более осторожно
+            return [base_target, base_target + 2, base_target + 3]
         
         return strategies.get(prediction_type, {}).get(situation, [base_target, base_target + 1, base_target + 2])
 
-# ======== ML ПРЕДИКТОР С ИСПРАВЛЕНИЯМИ ========
+# ======== ML ПРЕДИКТОР С АНАЛИЗОМ МАСТЕЙ ========
 class MLPredictor:
     def __init__(self, history_size=1000):
         self.history = deque(maxlen=history_size)
@@ -215,16 +200,94 @@ class MLPredictor:
         
         self.suit_transitions = defaultdict(lambda: defaultdict(int))
         
-        # НОВОЕ: ограничитель частоты
         self.rate_limiter = RateLimiter()
-        
-        # НОВОЕ: последний отправленный тип
-        self.last_prediction_type = 'value'  # начнем с suit в следующий раз
+        self.last_prediction_type = 'value'
         
         self.load_models()
         self.load_history()
         self.load_dangerous_patterns()
+    
+    # ======== НОВЫЙ МЕТОД: Анализ мастей игрока и банкира ========
+    def analyze_suit_patterns(self, game_data):
+        """
+        Анализирует масти для игрока и банкира на предмет сомнительных ситуаций
+        Возвращает: 'doubtful' - сомнительно, 'dominant' - преобладание, 'normal' - нормально
+        """
+        results = {'player': 'normal', 'banker': 'normal'}
         
+        # Анализ игрока
+        player_suits = game_data.get('player_suits', [])
+        if len(player_suits) >= 2:
+            # Две одинаковых масти в первой игре
+            if player_suits[0] == player_suits[1]:
+                logger.info(f"⚠️ ИГРОК: две {player_suits[0]} подряд в первой игре")
+                results['player'] = 'doubtful'
+            
+            # Третья карта совпадает с первой
+            if len(player_suits) >= 3 and player_suits[0] == player_suits[2]:
+                logger.info(f"⚠️ ИГРОК: третья карта {player_suits[2]} как первая")
+                results['player'] = 'doubtful'
+            
+            # Вторая и третья одинаковые
+            if len(player_suits) >= 3 and player_suits[1] == player_suits[2]:
+                logger.info(f"⚠️ ИГРОК: вторая и третья {player_suits[1]}")
+                results['player'] = 'doubtful'
+            
+            # Преобладание масти (2 из 3)
+            if len(player_suits) >= 3:
+                suit_count = Counter(player_suits)
+                most_common = suit_count.most_common(1)
+                if most_common and most_common[0][1] >= 2:
+                    logger.info(f"⚠️ ИГРОК: преобладает {most_common[0][0]} ({most_common[0][1]}/3)")
+                    results['player'] = 'dominant'
+        
+        # Анализ банкира
+        banker_suits = [c['suit'] for c in game_data.get('banker_cards', [])]
+        if len(banker_suits) >= 2:
+            # Две одинаковых масти в первой игре
+            if banker_suits[0] == banker_suits[1]:
+                logger.info(f"⚠️ БАНКИР: две {banker_suits[0]} подряд в первой игре")
+                results['banker'] = 'doubtful'
+            
+            # Третья карта совпадает с первой
+            if len(banker_suits) >= 3 and banker_suits[0] == banker_suits[2]:
+                logger.info(f"⚠️ БАНКИР: третья карта {banker_suits[2]} как первая")
+                results['banker'] = 'doubtful'
+            
+            # Вторая и третья одинаковые
+            if len(banker_suits) >= 3 and banker_suits[1] == banker_suits[2]:
+                logger.info(f"⚠️ БАНКИР: вторая и третья {banker_suits[1]}")
+                results['banker'] = 'doubtful'
+            
+            # Преобладание масти (2 из 3)
+            if len(banker_suits) >= 3:
+                suit_count = Counter(banker_suits)
+                most_common = suit_count.most_common(1)
+                if most_common and most_common[0][1] >= 2:
+                    logger.info(f"⚠️ БАНКИР: преобладает {most_common[0][0]} ({most_common[0][1]}/3)")
+                    results['banker'] = 'dominant'
+        
+        return results
+    
+    # ======== НОВЫЙ МЕТОД: Проверка, стоит ли пропустить из-за мастей ========
+    def should_skip_due_to_suits(self, game_data):
+        """
+        Определяет, нужно ли пропустить эту игру из-за сомнительных мастей
+        """
+        suit_analysis = self.analyze_suit_patterns(game_data)
+        
+        # Если у игрока ИЛИ банкира сомнительная ситуация - пропускаем
+        if suit_analysis['player'] == 'doubtful' or suit_analysis['banker'] == 'doubtful':
+            logger.info("🤔 Сомнительная ситуация по мастям - пропускаем ход")
+            return True
+        
+        # Если у обоих преобладание - тоже осторожно
+        if suit_analysis['player'] == 'dominant' and suit_analysis['banker'] == 'dominant':
+            logger.info("🤔 У обоих преобладание мастей - пропускаем для анализа")
+            return True
+        
+        return False
+    
     def _create_ensemble(self, task_type):
         """Создает ансамбль моделей"""
         if task_type == 'classifier':
@@ -704,12 +767,15 @@ class MLPredictor:
         last_game = list(self.history)[-1]
         current_game_num = last_game['game_num']
         
-        # НОВОЕ: проверяем, стоит ли вообще давать прогноз сейчас
+        # НОВОЕ: проверяем сомнительные масти перед прогнозом
+        if self.should_skip_due_to_suits(last_game):
+            logger.info(f"🤔 Пропускаем игру #{current_game_num} из-за сомнительных мастей")
+            return None, None
+        
         if self.rate_limiter.should_skip_game(last_game):
             logger.info(f"🤔 Пропускаем игру #{current_game_num} для обдумывания")
             return None, None
         
-        # НОВОЕ: определяем следующий тип прогноза (чередование)
         next_type = self.rate_limiter.get_next_type(self.last_prediction_type)
         
         if last_game.get('player_draws'):
@@ -776,7 +842,6 @@ class MLPredictor:
         predictions = {}
         next_game_num = current_game_num + 1
         
-        # НОВОЕ: пытаемся сделать прогноз только нужного типа
         target = next_type
         if game_type in self.models[target]:
             pred, confidence = self._ensemble_predict(
@@ -816,7 +881,6 @@ class MLPredictor:
                     }
                     self.last_prediction_type = target
         
-        # Если не удалось сделать прогноз нужного типа, пробуем другой
         if not predictions:
             for target in ['suit', 'value']:
                 if target == next_type:
@@ -971,7 +1035,6 @@ class MLPredictor:
         if len(self.history) >= 5:
             self.train_models()
         
-        # НОВОЕ: проверяем, можно ли отправлять прогноз сейчас
         if not self.rate_limiter.can_send_prediction():
             logger.info("⏳ Пропускаем прогноз из-за ограничений частоты")
             return
@@ -989,7 +1052,6 @@ class MLPredictor:
             self.prediction_counter += 1
             pred_id = self.prediction_counter
             
-            # НОВОЕ: используем разные стратегии догона
             game_situation = {
                 'target_game': next_game_num,
                 'was_tie': game_data.get('is_tie', False),
@@ -1083,15 +1145,12 @@ class MLPredictor:
     
     def _determine_situation(self, game_data):
         """Определяет ситуацию для выбора стратегии"""
-        # Анализируем игру
         if game_data.get('is_tie'):
             return 'conservative'
         
-        # Если масти часто повторяются
         if self.suit_streak > 3:
             return 'aggressive'
         
-        # Если счет сильно разный
         score_diff = abs(game_data.get('player_score', 0) - game_data.get('banker_score', 0))
         if score_diff > 7:
             return 'conservative'
@@ -1112,7 +1171,6 @@ class MLPredictor:
                 succeeded = False
                 actual_game = None
                 
-                # Для value проверяем все игры от target до текущей
                 for game_num in range(pred['target_game'], current_game_num + 1):
                     game = storage.games.get(game_num)
                     if not game:
@@ -1710,6 +1768,8 @@ def main():
     print("\n" + "="*60)
     print("🤖 ML БОТ С УМНЫМ ДОГОНОМ И ЧЕРЕДОВАНИЕМ")
     print("="*60)
+    print("✅ АНАЛИЗ МАСТЕЙ игрока и банкира")
+    print("✅ СОМНИТЕЛЬНЫЕ СИТУАЦИИ - пропускаем ход")
     print("✅ РАЗНЫЕ СТРАТЕГИИ ДОГОНА для масти и значения")
     print("✅ ЧЕРЕДОВАНИЕ типов прогнозов (suit/value)")
     print("✅ ОГРАНИЧЕНИЕ ЧАСТОТЫ (2-3 прогноза в 10 минут)")
