@@ -24,6 +24,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from collections import Counter
 import random
+import time as time_module
 
 # ======== НАСТРОЙКА ЛОГИРОВАНИЯ ========
 class JsonFormatter(logging.Formatter):
@@ -64,7 +65,112 @@ OUTPUT_CHANNEL_ID = -1003855079501
 
 LOCK_FILE = f'/tmp/ml_bot_{TOKEN[-10:]}.lock'
 
-# ======== ML ПРЕДИКТОР С ПРИКОЛАМИ (БЕЗ НЕЙРОСЕТИ) ========
+# ======== НОВЫЙ КЛАСС ДЛЯ УПРАВЛЕНИЯ ЧАСТОТОЙ ========
+class RateLimiter:
+    """Ограничивает частоту прогнозов"""
+    def __init__(self, max_predictions=3, time_window=600):  # 3 прогноза за 10 минут (600 сек)
+        self.max_predictions = max_predictions
+        self.time_window = time_window
+        self.predictions_history = deque(maxlen=max_predictions)
+        self.last_prediction_time = 0
+        self.consecutive_predictions = 0
+        
+    def can_send_prediction(self):
+        """Проверяет, можно ли отправить прогноз сейчас"""
+        current_time = time_module.time()
+        
+        # Если нет истории - можно
+        if len(self.predictions_history) == 0:
+            self.consecutive_predictions = 1
+            return True
+        
+        # Проверяем, не слишком ли часто
+        time_since_last = current_time - self.last_prediction_time
+        
+        # Минимум 3 минуты между прогнозами (180 секунд)
+        if time_since_last < 180:
+            logger.info(f"⏳ Слишком рано для прогноза. Прошло всего {time_since_last:.0f} сек, нужно минимум 180")
+            return False
+        
+        # Проверяем, не превышен ли лимит за последние 10 минут
+        self.predictions_history.append(current_time)
+        recent_predictions = [t for t in self.predictions_history if current_time - t <= self.time_window]
+        
+        if len(recent_predictions) > self.max_predictions:
+            logger.info(f"⏳ Лимит прогнозов за 10 минут: {len(recent_predictions)} > {self.max_predictions}")
+            return False
+        
+        self.last_prediction_time = current_time
+        self.consecutive_predictions += 1
+        return True
+    
+    def get_next_type(self, last_type):
+        """Возвращает следующий тип прогноза (чередование)"""
+        types = ['suit', 'value']
+        
+        # Если были последовательные прогнозы одного типа
+        if self.consecutive_predictions >= 2:
+            self.consecutive_predictions = 0
+            # Принудительно меняем тип
+            return 'value' if last_type == 'suit' else 'suit'
+        
+        # Простое чередование
+        return 'value' if last_type == 'suit' else 'suit'
+    
+    def should_skip_game(self, game_data):
+        """Анализирует, стоит ли пропустить эту игру"""
+        # Пропускаем, если игра нечетная и т.д. (настраивается)
+        if game_data.get('is_tie'):
+            # После ничьей пропускаем 1 игру
+            return random.random() < 0.7  # 70% шанс пропустить
+        
+        # Если счет сильно разный - подумать
+        score_diff = abs(game_data.get('player_score', 0) - game_data.get('banker_score', 0))
+        if score_diff >= 8:
+            # Разгром - пропускаем с вероятностью 50%
+            return random.random() < 0.5
+        
+        return False
+
+# ======== НОВЫЙ КЛАСС ДЛЯ РАЗНЫХ СТРАТЕГИЙ ДОГОНА ========
+class DogonStrategy:
+    """Разные стратегии догона для разных типов прогнозов"""
+    
+    @staticmethod
+    def get_doggens(prediction_type, game_situation):
+        """
+        Возвращает массив целей для догона в зависимости от типа прогноза и ситуации
+        """
+        base_target = game_situation.get('target_game', 0)
+        
+        # Стратегии для разных типов
+        strategies = {
+            'suit': {
+                'normal': [base_target, base_target + 1, base_target + 2],
+                'conservative': [base_target, base_target + 2, base_target + 4],  # Для редких мастей
+                'aggressive': [base_target, base_target + 1, base_target + 1]     # Для частых мастей
+            },
+            'value': {
+                'normal': [base_target, base_target + 2, base_target + 4],        # Значения ждем дольше
+                'conservative': [base_target, base_target + 3, base_target + 6],
+                'aggressive': [base_target, base_target + 1, base_target + 3]
+            }
+        }
+        
+        # Анализируем ситуацию
+        situation = game_situation.get('situation', 'normal')
+        
+        # Если была ничья - особый случай
+        if game_situation.get('was_tie'):
+            return [base_target, base_target + 3, base_target + 6]  # После ничьей пауза
+        
+        # Если предыдущий прогноз не зашел
+        if game_situation.get('previous_failed'):
+            return [base_target, base_target + 2, base_target + 3]  # Более осторожно
+        
+        return strategies.get(prediction_type, {}).get(situation, [base_target, base_target + 1, base_target + 2])
+
+# ======== ML ПРЕДИКТОР С ИСПРАВЛЕНИЯМИ ========
 class MLPredictor:
     def __init__(self, history_size=1000):
         self.history = deque(maxlen=history_size)
@@ -109,12 +215,18 @@ class MLPredictor:
         
         self.suit_transitions = defaultdict(lambda: defaultdict(int))
         
+        # НОВОЕ: ограничитель частоты
+        self.rate_limiter = RateLimiter()
+        
+        # НОВОЕ: последний отправленный тип
+        self.last_prediction_type = 'value'  # начнем с suit в следующий раз
+        
         self.load_models()
         self.load_history()
         self.load_dangerous_patterns()
         
     def _create_ensemble(self, task_type):
-        """Создает ансамбль моделей БЕЗ нейросети"""
+        """Создает ансамбль моделей"""
         if task_type == 'classifier':
             return {
                 'rf': RandomForestClassifier(n_estimators=50, max_depth=5, random_state=42),
@@ -163,7 +275,6 @@ class MLPredictor:
         
         return final_pred, confidence
     
-    # ======== МЕТОД С ПРИКОЛАМИ ========
     def _get_funny_comment(self, comment_type, **kwargs):
         """Возвращает ржачный комментарий"""
         
@@ -205,6 +316,11 @@ class MLPredictor:
             'anomalies': [
                 "🧐 Однако... чет странное творится!",
                 "🤯 Такого даже я не ожидал!"
+            ],
+            'skipped': [
+                "🤔 Дай-ка подумаю... пропущу эту",
+                "🧠 Мозг говорит 'не сейчас'",
+                "💭 Обдумываю стратегию..."
             ]
         }
         
@@ -232,6 +348,9 @@ class MLPredictor:
         
         elif comment_type == 'anomaly':
             return random.choice(jokes['anomalies'])
+        
+        elif comment_type == 'skipped':
+            return random.choice(jokes['skipped'])
         
         return ""
     
@@ -363,6 +482,7 @@ class MLPredictor:
             'has_x': game_data.get('has_x_tag', False),
             'player_draws': game_data.get('player_draws', False),
             'banker_draws': game_data.get('banker_draws', False),
+            'is_tie': game_data.get('is_tie', False)
         }
         
         player_suits = [c['suit'] for c in game_data.get('player_cards', [])]
@@ -463,6 +583,7 @@ class MLPredictor:
         
         features.append(1 if current.get('player_draws', False) else 0)
         features.append(1 if current.get('banker_draws', False) else 0)
+        features.append(1 if current.get('is_tie', False) else 0)
         
         features.append(current.get('hour', 0))
         features.append(current.get('minute', 0))
@@ -477,7 +598,7 @@ class MLPredictor:
         for combo in common_combos:
             features.append(1 if suit_combo == combo else 0)
         
-        for offset in range(1, 6):
+        for offset in range(1, 4):
             if index - offset >= 0:
                 past = list(self.history)[index - offset]
                 features.append(1 if past.get('winner') == 'player' else 0)
@@ -583,6 +704,14 @@ class MLPredictor:
         last_game = list(self.history)[-1]
         current_game_num = last_game['game_num']
         
+        # НОВОЕ: проверяем, стоит ли вообще давать прогноз сейчас
+        if self.rate_limiter.should_skip_game(last_game):
+            logger.info(f"🤔 Пропускаем игру #{current_game_num} для обдумывания")
+            return None, None
+        
+        # НОВОЕ: определяем следующий тип прогноза (чередование)
+        next_type = self.rate_limiter.get_next_type(self.last_prediction_type)
+        
         if last_game.get('player_draws'):
             game_type = '2cards'
         elif last_game.get('banker_draws'):
@@ -615,6 +744,7 @@ class MLPredictor:
         
         features.append(1 if last_game.get('player_draws', False) else 0)
         features.append(1 if last_game.get('banker_draws', False) else 0)
+        features.append(1 if last_game.get('is_tie', False) else 0)
         
         features.append(last_game.get('hour', 0))
         features.append(last_game.get('minute', 0))
@@ -630,7 +760,7 @@ class MLPredictor:
             features.append(1 if suit_combo == combo else 0)
         
         history_len = len(self.history)
-        for offset in range(1, 6):
+        for offset in range(1, 4):
             if history_len - 1 - offset >= 0:
                 past = list(self.history)[history_len - 1 - offset]
                 features.append(1 if past.get('winner') == 'player' else 0)
@@ -646,44 +776,74 @@ class MLPredictor:
         predictions = {}
         next_game_num = current_game_num + 1
         
-        for target in ['suit', 'value']:
-            if game_type not in self.models[target]:
-                continue
-            
+        # НОВОЕ: пытаемся сделать прогноз только нужного типа
+        target = next_type
+        if game_type in self.models[target]:
             pred, confidence = self._ensemble_predict(
                 self.models[target][game_type], 
                 X, 
                 'classifier' if target == 'suit' else 'regressor'
             )
             
-            if pred is None:
-                continue
-            
-            threshold = self.confidence_threshold
-            if self.dynamic_threshold:
-                stats = self.predictions_stats[target]
-                if stats['total'] > 20:
-                    success_rate = stats['success'] / stats['total']
-                    if success_rate > 0.7:
-                        threshold = 0.4
-                    elif success_rate < 0.4:
-                        threshold = 0.6
-            
-            if target == 'value':
-                if self._was_value_recent(pred, games_to_check=3):
+            if pred is not None:
+                threshold = self.confidence_threshold
+                if self.dynamic_threshold:
+                    stats = self.predictions_stats[target]
+                    if stats['total'] > 20:
+                        success_rate = stats['success'] / stats['total']
+                        if success_rate > 0.7:
+                            threshold = 0.4
+                        elif success_rate < 0.4:
+                            threshold = 0.6
+                
+                if target == 'value':
+                    if self._was_value_recent(pred, games_to_check=3):
+                        logger.info(f"ML: значение {pred} было недавно, пропускаем")
+                        return None, None
+                    if self._was_value_predicted_recently(pred, current_game_num, games_to_check=2):
+                        logger.info(f"ML: значение {pred} уже предсказывали недавно")
+                        return None, None
+                
+                if self._is_dangerous_situation(last_game, target, pred):
+                    logger.info(f"ML: опасная ситуация для {target}, пропускаем")
+                    return None, None
+                
+                if confidence >= threshold:
+                    predictions[target] = {
+                        'value': pred,
+                        'confidence': float(confidence),
+                        'game_type': game_type
+                    }
+                    self.last_prediction_type = target
+        
+        # Если не удалось сделать прогноз нужного типа, пробуем другой
+        if not predictions:
+            for target in ['suit', 'value']:
+                if target == next_type:
                     continue
-                if self._was_value_predicted_recently(pred, current_game_num, games_to_check=2):
-                    continue
-            
-            if self._is_dangerous_situation(last_game, target, pred):
-                continue
-            
-            if confidence >= threshold:
-                predictions[target] = {
-                    'value': pred,
-                    'confidence': float(confidence),
-                    'game_type': game_type
-                }
+                if game_type in self.models[target]:
+                    pred, confidence = self._ensemble_predict(
+                        self.models[target][game_type], 
+                        X, 
+                        'classifier' if target == 'suit' else 'regressor'
+                    )
+                    
+                    if pred is not None and confidence >= self.confidence_threshold:
+                        if target == 'value':
+                            if self._was_value_recent(pred, games_to_check=3):
+                                continue
+                            if self._was_value_predicted_recently(pred, current_game_num, games_to_check=2):
+                                continue
+                        
+                        if self._is_dangerous_situation(last_game, target, pred):
+                            continue
+                        
+                        predictions[target] = {
+                            'value': pred,
+                            'confidence': float(confidence),
+                            'game_type': game_type
+                        }
+                        break
         
         return predictions, next_game_num
     
@@ -811,6 +971,11 @@ class MLPredictor:
         if len(self.history) >= 5:
             self.train_models()
         
+        # НОВОЕ: проверяем, можно ли отправлять прогноз сейчас
+        if not self.rate_limiter.can_send_prediction():
+            logger.info("⏳ Пропускаем прогноз из-за ограничений частоты")
+            return
+        
         predictions, next_game_num = self.predict_next_game()
         if not predictions:
             return
@@ -824,7 +989,15 @@ class MLPredictor:
             self.prediction_counter += 1
             pred_id = self.prediction_counter
             
-            doggens = [next_game_num, next_game_num + 1, next_game_num + 2]
+            # НОВОЕ: используем разные стратегии догона
+            game_situation = {
+                'target_game': next_game_num,
+                'was_tie': game_data.get('is_tie', False),
+                'previous_failed': self._check_previous_failed(target_type),
+                'situation': self._determine_situation(game_data)
+            }
+            
+            doggens = DogonStrategy.get_doggens(target_type, game_situation)
             
             time_joke = ""
             confidence_joke = self._get_funny_comment('confidence', confidence=pred['confidence'])
@@ -832,7 +1005,7 @@ class MLPredictor:
             if target_type == 'suit':
                 suit_map_rev = {0: '♥️', 1: '♦️', 2: '♠️', 3: '♣️'}
                 suit = suit_map_rev.get(int(pred['value']), '?')
-                suit_joke = self._get_funny_comment('suit', suit=suit)
+                suit_joke = self._get_funny_comment('suit', suit=suit')
                 
                 message = (
                     f"🎯 *ML ПРОГНОЗ #{pred_id}*\n"
@@ -897,9 +1070,33 @@ class MLPredictor:
                     'doggens': doggens
                 })
                 
-                logger.info(f"ML: отправлен прогноз #{pred_id} ({target_type}) на игру #{next_game_num}")
+                logger.info(f"ML: отправлен прогноз #{pred_id} ({target_type}) на игру #{next_game_num} с догонами {doggens}")
             except Exception as e:
                 logger.error(f"ML: ошибка отправки: {e}")
+    
+    def _check_previous_failed(self, target_type):
+        """Проверяет, был ли предыдущий прогноз этого типа неудачным"""
+        for pred in reversed(self.active_predictions):
+            if pred['type'] == target_type:
+                return pred['status'] == 'loss'
+        return False
+    
+    def _determine_situation(self, game_data):
+        """Определяет ситуацию для выбора стратегии"""
+        # Анализируем игру
+        if game_data.get('is_tie'):
+            return 'conservative'
+        
+        # Если масти часто повторяются
+        if self.suit_streak > 3:
+            return 'aggressive'
+        
+        # Если счет сильно разный
+        score_diff = abs(game_data.get('player_score', 0) - game_data.get('banker_score', 0))
+        if score_diff > 7:
+            return 'conservative'
+        
+        return 'normal'
     
     async def check_predictions(self, current_game_num, game_data, context):
         logger.info(f"🔍 ML: проверка прогнозов по игре #{current_game_num}")
@@ -915,6 +1112,7 @@ class MLPredictor:
                 succeeded = False
                 actual_game = None
                 
+                # Для value проверяем все игры от target до текущей
                 for game_num in range(pred['target_game'], current_game_num + 1):
                     game = storage.games.get(game_num)
                     if not game:
@@ -939,7 +1137,7 @@ class MLPredictor:
                 else:
                     if pred['attempt'] < 2:
                         pred['attempt'] += 1
-                        pred['target_game'] = current_game_num + 1
+                        pred['target_game'] = pred['doggens'][pred['attempt']]
                         pred['status'] = 'pending'
                         await self._update_prediction_dogon(pred, context)
                     else:
@@ -1510,19 +1708,15 @@ async def check_stuck_games(context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     print("\n" + "="*60)
-    print("🤖 ВЕЛИКОЛЕПНЫЙ ML БОТ-КОМИК (ФИНАЛЬНАЯ ВЕРСИЯ)")
+    print("🤖 ML БОТ С УМНЫМ ДОГОНОМ И ЧЕРЕДОВАНИЕМ")
     print("="*60)
-    print("✅ АНСАМБЛЬ МОДЕЛЕЙ (RF, GB, SVM) - без капризной нейросети")
-    print("✅ РАЗДЕЛЬНЫЕ МОДЕЛИ для 2 карт / добор игрока / добор банкира")
-    print("✅ РАСШИРЕННЫЕ ПРИЗНАКИ (время, серии, комбинации)")
+    print("✅ РАЗНЫЕ СТРАТЕГИИ ДОГОНА для масти и значения")
+    print("✅ ЧЕРЕДОВАНИЕ типов прогнозов (suit/value)")
+    print("✅ ОГРАНИЧЕНИЕ ЧАСТОТЫ (2-3 прогноза в 10 минут)")
+    print("✅ АНАЛИЗ СИТУАЦИИ перед прогнозом")
+    print("✅ УЧЕТ НИЧЬИХ и серий")
     print("✅ ДИНАМИЧЕСКИЙ ПОРОГ уверенности")
-    print("✅ АНАЛИЗ ОПАСНЫХ СИТУАЦИЙ")
-    print("✅ АВТОМАТИЧЕСКИЙ ДОГОН (3 попытки)")
-    print("✅ ПРОВЕРКА ЗНАЧЕНИЙ во всех играх после прогноза")
-    print("✅ ЗАЩИТА от повторных прогнозов")
-    print("✅ ПРЕДУПРЕЖДЕНИЯ ОБ АНОМАЛИЯХ")
-    print("✅ ВИЗУАЛИЗАЦИЯ статистики (графики)")
-    print("✅ Видит добор и игрока (👈) и банкира (👉)")
+    print("✅ АНСАМБЛЬ МОДЕЛЕЙ (RF, GB, SVM)")
     print("✅ 30+ РЖАЧНЫХ КОММЕНТАРИЕВ! 🎭")
     print("="*60)
     
