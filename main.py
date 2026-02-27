@@ -331,7 +331,7 @@ class SelfLearningBot:
             win = False
             
             if p['type'] == 'suit':
-                # Масть проверяем только у игрока (как ты хотел)
+                # Масть проверяем только у игрока
                 player_suits = [c['suit'] for c in game_data.get('player_cards', [])]
                 suit_map = ['♥️', '♦️', '♠️', '♣️']
                 pred_suit = suit_map[p['value']]
@@ -552,7 +552,6 @@ def main():
     print("="*60)
     print("✅ Ждёт третьи карты")
     print("✅ Проверяет масти только у игрока")
-    print✅
     print("✅ Учитывает все карты")
     print("✅ Сам учится на ошибках")
     print("="*60)
