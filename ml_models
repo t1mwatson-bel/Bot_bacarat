@@ -1,0 +1,6 @@
+ml_models/
+├── strategy_memory.json     # память стратегий
+├── patterns.json             # найденные паттерны
+├── model_suit_2cards_rf.pkl  # модель для мастей
+├── model_value_2cards_rf.pkl # модель для значений
+└── ...
