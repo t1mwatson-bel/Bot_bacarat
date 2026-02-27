@@ -195,6 +195,10 @@ class SelfLearningBot:
         mapping = {'A':1, '2':2, '3':3, '4':4, '5':5, '6':6, '7':7, '8':8, '9':9, '10':10, 'J':11, 'Q':12, 'K':13}
         return mapping.get(card, 0)
     
+    def number_to_card(self, num):
+        mapping = {1:'A', 2:'2', 3:'3', 4:'4', 5:'5', 6:'6', 7:'7', 8:'8', 9:'9', 10:'10', 11:'J', 12:'Q', 13:'K'}
+        return mapping.get(num, '?')
+    
     def add_game(self, game_data):
         if not game_data:
             return []
@@ -233,14 +237,15 @@ class SelfLearningBot:
         return [game_num + 1, game_num + 3, game_num + 6]
     
     async def analyze_and_predict(self, game_data, context):
-        # Проверяем пропуск
+        # Проверяем пропуск после аномалии
         if self.skip_until_game > 0 and game_data['game_num'] < self.skip_until_game:
+            logger.info(f"⏸ Пропуск игры #{game_data['game_num']} (после аномалии)")
             return
         
-        # Добавляем игру
+        # Добавляем игру в историю
         anomalies = self.add_game(game_data)
         
-        # Аномалия
+        # Если есть аномалия
         if anomalies:
             await context.bot.send_message(
                 chat_id=OUTPUT_CHANNEL_ID,
@@ -249,8 +254,14 @@ class SelfLearningBot:
             self.skip_until_game = game_data['game_num'] + 5
             return
         
-        # Проверяем активные
+        # Проверяем активные прогнозы
         if any(p['status'] == 'pending' for p in self.active_predictions):
+            logger.info("⏳ Есть активный прогноз, новый не создаем")
+            return
+        
+        # Ждём полную версию игры (с третьей картой если нужна)
+        if game_data.get('player_draws') or game_data.get('banker_draws'):
+            logger.info(f"⏳ Игра #{game_data['game_num']}: ожидание третьей карты")
             return
         
         # Прогноз
@@ -263,15 +274,16 @@ class SelfLearningBot:
         # Формируем сообщение
         if pred['type'] == 'suit':
             suits = ['♥️', '♦️', '♠️', '♣️']
-            val = suits[pred['value']]  # теперь всегда 0-3, так что '?' не будет
+            val = suits[pred['value']]
             msg = (
                 f"🎯 Прогноз #{pid} — масть {val}\n"
                 f"📊 Уверенность: {int(pred['confidence']*100)}%\n"
                 f"🔄 Цели: #{dogons[0]}, #{dogons[1]}, #{dogons[2]}"
             )
         else:
+            card = self.number_to_card(pred['value'])
             msg = (
-                f"🎯 Прогноз #{pid} — значение {pred['value']}\n"
+                f"🎯 Прогноз #{pid} — значение {pred['value']} ({card})\n"
                 f"📊 Уверенность: {int(pred['confidence']*100)}%\n"
                 f"🔄 Цели: #{dogons[0]}, #{dogons[1]}, #{dogons[2]}"
             )
@@ -288,8 +300,17 @@ class SelfLearningBot:
             'status': 'pending',
             'confidence': pred['confidence']
         })
+        
+        logger.info(f"📤 Прогноз #{pid} на игру #{dogons[0]}")
     
     async def check_predictions(self, game_num, game_data, context):
+        """Проверяет активные прогнозы по завершённой игре"""
+        
+        # Проверяем что игра завершена (есть третья карта если нужна)
+        if game_data.get('player_draws') or game_data.get('banker_draws'):
+            logger.info(f"⏳ Игра #{game_num}: неполная версия, пропускаем проверку")
+            return
+        
         for p in self.active_predictions:
             if p['status'] != 'pending':
                 continue
@@ -298,27 +319,34 @@ class SelfLearningBot:
             if target != game_num:
                 continue
             
-            # Проверка
-            win = False
-            if p['type'] == 'suit':
-                suits = [c['suit'] for c in game_data.get('player_cards', [])]
-                suit_map = ['♥️', '♦️', '♠️', '♣️']
-                pred_suit = suit_map[p['value']]  # теперь всегда 0-3
-                win = pred_suit in suits
-            else:
-                vals = []
-                for c in game_data.get('player_cards', []):
-                    vals.append(self.card_to_number(c['value']))
-                for c in game_data.get('banker_cards', []):
-                    vals.append(self.card_to_number(c['value']))
-                win = p['value'] in vals
-            
             # Определяем что прогнозировали для сообщения
             if p['type'] == 'suit':
                 suits = ['♥️', '♦️', '♠️', '♣️']
                 pred_info = f"масть {suits[p['value']]}"
             else:
-                pred_info = f"значение {p['value']}"
+                card = self.number_to_card(p['value'])
+                pred_info = f"значение {p['value']} ({card})"
+            
+            # Проверка результата
+            win = False
+            
+            if p['type'] == 'suit':
+                # Масть проверяем только у игрока (как ты хотел)
+                player_suits = [c['suit'] for c in game_data.get('player_cards', [])]
+                suit_map = ['♥️', '♦️', '♠️', '♣️']
+                pred_suit = suit_map[p['value']]
+                win = pred_suit in player_suits
+                logger.info(f"🔍 Масть: ищем {pred_suit} в {player_suits} -> {win}")
+                
+            else:  # value
+                # Значение проверяем у обоих
+                all_values = []
+                for c in game_data.get('player_cards', []):
+                    all_values.append(self.card_to_number(c['value']))
+                for c in game_data.get('banker_cards', []):
+                    all_values.append(self.card_to_number(c['value']))
+                win = p['value'] in all_values
+                logger.info(f"🔍 Значение: ищем {p['value']} в {all_values} -> {win}")
             
             if win:
                 p['status'] = 'win'
@@ -328,6 +356,7 @@ class SelfLearningBot:
                     message_id=p['msg_id'],
                     text=f"✅ Прогноз #{p['id']} — {pred_info} ЗАШЁЛ в игре #{game_num}!"
                 )
+                logger.info(f"✅ Прогноз #{p['id']} зашёл в игре #{game_num}")
             else:
                 if p['attempt'] < 2:
                     p['attempt'] += 1
@@ -338,6 +367,7 @@ class SelfLearningBot:
                         message_id=p['msg_id'],
                         text=f"🔄 Прогноз #{p['id']} — {pred_info}, догон {p['attempt']+1} (цель #{p['games'][p['attempt']]})"
                     )
+                    logger.info(f"🔄 Прогноз #{p['id']} догон {p['attempt']+1} на игру #{p['games'][p['attempt']]}")
                 else:
                     p['status'] = 'loss'
                     await context.bot.edit_message_text(
@@ -345,6 +375,7 @@ class SelfLearningBot:
                         message_id=p['msg_id'],
                         text=f"❌ Прогноз #{p['id']} — {pred_info} НЕ ЗАШЁЛ"
                     )
+                    logger.info(f"❌ Прогноз #{p['id']} не зашёл")
             
             self.stats['total'] += 1
 
@@ -404,8 +435,10 @@ async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Получаем сообщение
         if update.channel_post:
             message = update.channel_post
+            is_edit = False
         elif update.edited_channel_post:
             message = update.edited_channel_post
+            is_edit = True
         else:
             return
         
@@ -420,40 +453,108 @@ async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         game_num = game_data['game_num']
         
-        # Логируем
-        logger.info(f"Игра #{game_num}")
+        # Подробный лог
+        logger.info(f"\n{'='*60}")
+        logger.info(f"📥 {'РЕДАКТИРОВАНИЕ' if is_edit else 'НОВОЕ'}: игра #{game_num}")
         
-        # Сохраняем
-        if storage:
-            storage.games[game_num] = game_data
+        player_cards_str = [f"{c['value']}{c['suit']}" for c in game_data['player_cards']]
+        banker_cards_str = [f"{c['value']}{c['suit']}" for c in game_data['banker_cards']]
+        logger.info(f"   Карты игрока: {player_cards_str}")
+        logger.info(f"   Карты банкира: {banker_cards_str}")
+        logger.info(f"   Теги: R={game_data['has_r_tag']}, X={game_data['has_x_tag']}")
+        logger.info(f"   Добор: игрок {'👈' if game_data['player_draws'] else 'нет'}, банкир {'👉' if game_data['banker_draws'] else 'нет'}")
+        logger.info(f"   Завершена: {game_data['has_check'] or game_data['has_green_square'] or game_data['is_tie']}")
+        
+        # Сохраняем в хранилище
+        if not storage:
+            logger.warning("❌ Бот не инициализирован")
+            return
+        
+        storage.games[game_num] = game_data
+        
+        # Если это редактирование - просто обновляем
+        if is_edit:
+            logger.info(f"✏️ Редактирование игры #{game_num}")
+            if game_num in pending_games:
+                del pending_games[game_num]
+            # Проверяем прогнозы
+            await storage.check_predictions(game_num, game_data, context)
+            return
+        
+        # Если есть добор - ждём третью карту
+        if game_data['player_draws'] or game_data['banker_draws']:
+            logger.info(f"⏳ Игра #{game_num}: ожидание третьей карты")
+            pending_games[game_num] = PendingGame(game_data, datetime.now())
+            return
+        
+        # Если игра завершена (нет доборов)
+        if not game_data['player_draws'] and not game_data['banker_draws']:
+            if game_num in pending_games:
+                logger.info(f"✅ Игра #{game_num}: получена полная версия")
+                del pending_games[game_num]
+            else:
+                logger.info(f"✅ Игра #{game_num}: полная версия сразу")
             
             # Проверяем прогнозы
             await storage.check_predictions(game_num, game_data, context)
             
-            # Анализируем
+            # Анализируем и создаём новый прогноз
             await storage.analyze_and_predict(game_data, context)
         
+        # Очистка старых ожидающих игр
+        current_time = datetime.now()
+        for pending_num in list(pending_games.keys()):
+            if pending_num < game_num - 20:
+                logger.info(f"🧹 Очистка ожидания игры #{pending_num}")
+                del pending_games[pending_num]
+        
     except Exception as e:
-        logger.error(f"Ошибка: {e}")
+        logger.error(f"❌ Ошибка: {e}", exc_info=True)
 
 # ======== СТАТИСТИКА ========
 async def daily_stats(context: ContextTypes.DEFAULT_TYPE):
     if storage:
+        total = storage.stats['total']
+        success = storage.stats['success']
+        percent = int(success / max(1, total) * 100) if total > 0 else 0
+        
         await context.bot.send_message(
             chat_id=OUTPUT_CHANNEL_ID,
-            text=f"📊 Статистика: {storage.stats['success']}/{storage.stats['total']}"
+            text=(
+                f"📊 *СТАТИСТИКА*\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"📈 Всего прогнозов: {total}\n"
+                f"✅ Зашло: {success}\n"
+                f"📊 Процент: {percent}%\n"
+                f"🧠 В истории: {len(storage.history)} игр"
+            ),
+            parse_mode='Markdown'
         )
 
 # ======== ПРОВЕРКА ЗАВИСШИХ ========
 async def check_stuck_games(context: ContextTypes.DEFAULT_TYPE):
-    pass
+    current_time = datetime.now()
+    for game_num, pending in list(pending_games.items()):
+        if (current_time - pending.first_seen).seconds > 120:
+            logger.info(f"⏰ Игра #{game_num} зависла в ожидании >2 мин, проверяем")
+            
+            if storage and game_num in storage.games:
+                await storage.check_predictions(game_num, storage.games[game_num], context)
+            
+            del pending_games[game_num]
 
 # ======== MAIN ========
 def main():
     global storage
     
     print("\n" + "="*60)
-    print("🤖 ML v3.0 БОТ")
+    print("🤖 ML v3.0 САМООБУЧАЮЩИЙСЯ БОТ")
+    print("="*60)
+    print("✅ Ждёт третьи карты")
+    print("✅ Проверяет масти только у игрока")
+    print✅
+    print("✅ Учитывает все карты")
+    print("✅ Сам учится на ошибках")
     print("="*60)
     
     if not acquire_lock():
@@ -462,6 +563,9 @@ def main():
     if not check_bot_token():
         release_lock()
         sys.exit(1)
+    
+    # Создаём папку для моделей
+    os.makedirs('ml_models', exist_ok=True)
     
     storage = SelfLearningBot()
     
@@ -475,8 +579,9 @@ def main():
     job_queue = app.job_queue
     if job_queue:
         job_queue.run_daily(daily_stats, time=time(23, 59, 0))
+        job_queue.run_repeating(check_stuck_games, interval=30, first=10)
     
-    logger.info("🚀 Бот запущен")
+    logger.info("🚀 Бот запущен и готов к работе")
     
     try:
         app.run_polling(
