@@ -251,13 +251,21 @@ class SelfLearningBot:
         self.prediction_counter += 1
         pid = self.prediction_counter
         
-        # Отправка
+        # Формируем сообщение
         if pred['type'] == 'suit':
             suits = ['♥️', '♦️', '♠️', '♣️']
             val = suits[pred['value']] if pred['value'] < 4 else '?'
-            msg = f"🎯 Прогноз #{pid}\nЦель: #{dogons[0]}\nМасть: {val}"
+            msg = (
+                f"🎯 Прогноз #{pid} — масть {val}\n"
+                f"📊 Уверенность: {int(pred['confidence']*100)}%\n"
+                f"🔄 Цели: #{dogons[0]}, #{dogons[1]}, #{dogons[2]}"
+            )
         else:
-            msg = f"🎯 Прогноз #{pid}\nЦель: #{dogons[0]}\nЗначение: {pred['value']}"
+            msg = (
+                f"🎯 Прогноз #{pid} — значение {pred['value']}\n"
+                f"📊 Уверенность: {int(pred['confidence']*100)}%\n"
+                f"🔄 Цели: #{dogons[0]}, #{dogons[1]}, #{dogons[2]}"
+            )
         
         sent = await context.bot.send_message(chat_id=OUTPUT_CHANNEL_ID, text=msg)
         
@@ -268,7 +276,8 @@ class SelfLearningBot:
             'games': dogons,
             'attempt': 0,
             'msg_id': sent.message_id,
-            'status': 'pending'
+            'status': 'pending',
+            'confidence': pred['confidence']
         })
     
     async def check_predictions(self, game_num, game_data, context):
@@ -295,29 +304,37 @@ class SelfLearningBot:
                     vals.append(self.card_to_number(c['value']))
                 win = p['value'] in vals
             
+            # Определяем что прогнозировали для сообщения
+            if p['type'] == 'suit':
+                suits = ['♥️', '♦️', '♠️', '♣️']
+                pred_info = f"масть {suits[p['value']]}" if p['value'] < 4 else "масть ?"
+            else:
+                pred_info = f"значение {p['value']}"
+            
             if win:
                 p['status'] = 'win'
                 self.stats['success'] += 1
                 await context.bot.edit_message_text(
                     chat_id=OUTPUT_CHANNEL_ID,
                     message_id=p['msg_id'],
-                    text=f"✅ Прогноз #{p['id']} ЗАШЁЛ!"
+                    text=f"✅ Прогноз #{p['id']} — {pred_info} ЗАШЁЛ в игре #{game_num}!"
                 )
             else:
                 if p['attempt'] < 2:
                     p['attempt'] += 1
                     p['status'] = 'pending'
+                    
                     await context.bot.edit_message_text(
                         chat_id=OUTPUT_CHANNEL_ID,
                         message_id=p['msg_id'],
-                        text=f"🔄 Прогноз #{p['id']} догон {p['attempt']+1}"
+                        text=f"🔄 Прогноз #{p['id']} — {pred_info}, догон {p['attempt']+1} (цель #{p['games'][p['attempt']]})"
                     )
                 else:
                     p['status'] = 'loss'
                     await context.bot.edit_message_text(
                         chat_id=OUTPUT_CHANNEL_ID,
                         message_id=p['msg_id'],
-                        text=f"❌ Прогноз #{p['id']} НЕ ЗАШЁЛ"
+                        text=f"❌ Прогноз #{p['id']} — {pred_info} НЕ ЗАШЁЛ"
                     )
             
             self.stats['total'] += 1
@@ -394,7 +411,7 @@ async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         game_num = game_data['game_num']
         
-        # Логируем просто
+        # Логируем
         logger.info(f"Игра #{game_num}")
         
         # Сохраняем
