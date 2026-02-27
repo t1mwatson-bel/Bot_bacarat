@@ -1,26 +1,19 @@
-# Секреты и токены (НИКОГДА не пушить!)
+# Environment
 .env
 .env.local
-*.env
 
-# Папки с моделями (большие файлы)
-ml_models/
-*.pkl
-*.joblib
-
-# Временные файлы Python
+# Python
 __pycache__/
-*.py[code]
+*.py[cod]
 *.so
 
-# Логи
+# Data
+ml_history.json
+dangerous_patterns.json
+strategy_memory.json
+*.pkl
+ml_models/
+
+# Logs
 logs/
 *.log
-
-# Базы данных
-*.db
-*.sqlite3
-
-# Системные файлы
-.DS_Store
-Thumbs.db
