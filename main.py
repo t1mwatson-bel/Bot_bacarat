@@ -563,8 +563,15 @@ def main():
         release_lock()
         sys.exit(1)
     
-    # Создаём папку для моделей
-    os.makedirs('ml_models', exist_ok=True)
+    # Создаём папку для моделей, игнорируем если уже есть
+    try:
+        os.makedirs('ml_models', exist_ok=True)
+        logger.info("📁 Папка ml_models создана")
+    except FileExistsError:
+        # Папка уже существует - это нормально
+        logger.info("📁 Папка ml_models уже существует")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при создании папки: {e}")
     
     storage = SelfLearningBot()
     
