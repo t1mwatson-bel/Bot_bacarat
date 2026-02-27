@@ -212,10 +212,19 @@ class SelfLearningBot:
         return anomalies
     
     def predict(self, game_data):
-        # Простой рандом для начала
+        # Выбираем тип прогноза
+        pred_type = random.choice(['suit', 'value'])
+        
+        if pred_type == 'suit':
+            # Для масти: только 0,1,2,3 (♥️,♦️,♠️,♣️)
+            value = random.randint(0, 3)
+        else:
+            # Для значения: только 1-13 (A,2-10,J,Q,K)
+            value = random.randint(1, 13)
+        
         return {
-            'type': random.choice(['suit', 'value']),
-            'value': random.randint(1, 13) if random.random() > 0.5 else random.randint(0, 3),
+            'type': pred_type,
+            'value': value,
             'confidence': 0.5
         }
     
@@ -254,7 +263,7 @@ class SelfLearningBot:
         # Формируем сообщение
         if pred['type'] == 'suit':
             suits = ['♥️', '♦️', '♠️', '♣️']
-            val = suits[pred['value']] if pred['value'] < 4 else '?'
+            val = suits[pred['value']]  # теперь всегда 0-3, так что '?' не будет
             msg = (
                 f"🎯 Прогноз #{pid} — масть {val}\n"
                 f"📊 Уверенность: {int(pred['confidence']*100)}%\n"
@@ -294,7 +303,7 @@ class SelfLearningBot:
             if p['type'] == 'suit':
                 suits = [c['suit'] for c in game_data.get('player_cards', [])]
                 suit_map = ['♥️', '♦️', '♠️', '♣️']
-                pred_suit = suit_map[p['value']] if p['value'] < 4 else '?'
+                pred_suit = suit_map[p['value']]  # теперь всегда 0-3
                 win = pred_suit in suits
             else:
                 vals = []
@@ -307,7 +316,7 @@ class SelfLearningBot:
             # Определяем что прогнозировали для сообщения
             if p['type'] == 'suit':
                 suits = ['♥️', '♦️', '♠️', '♣️']
-                pred_info = f"масть {suits[p['value']]}" if p['value'] < 4 else "масть ?"
+                pred_info = f"масть {suits[p['value']]}"
             else:
                 pred_info = f"значение {p['value']}"
             
