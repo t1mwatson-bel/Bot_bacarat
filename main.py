@@ -190,6 +190,10 @@ class MLPredictor:
         self.rate_limiter = RateLimiter()
         self.last_prediction_type = 'value'
         
+        # ========== НОВЫЕ ПЕРЕМЕННЫЕ ДЛЯ ПРОПУСКА ПОСЛЕ АНОМАЛИЙ ==========
+        self.skip_until_game = 0
+        # ===================================================================
+        
         self.load_models()
         self.load_history()
         self.load_dangerous_patterns()
@@ -993,6 +997,20 @@ class MLPredictor:
         
         if anomalies:
             await self._send_anomaly_alert(anomalies, game_data, context)
+            
+            # ========== ПРОПУСК ПОСЛЕ АНОМАЛИИ ==========
+            self.skip_until_game = game_data['game_num'] + 5
+            logger.info(f"⏸ Аномалия в игре #{game_data['game_num']} — пропускаем следующие 5 игр до #{self.skip_until_game}")
+            return
+            # ============================================
+        
+        # ========== ПРОВЕРКА НА ПРОПУСК ПОСЛЕ АНОМАЛИИ ==========
+        if self.skip_until_game > 0 and game_data['game_num'] < self.skip_until_game:
+            logger.info(f"⏸ Пропускаем игру #{game_data['game_num']} (после аномалии, до #{self.skip_until_game})")
+            return
+        else:
+            self.skip_until_game = 0
+        # =========================================================
         
         if len(self.history) >= 5:
             self.train_models()
@@ -1333,6 +1351,11 @@ class MLPredictor:
                 if stats['total'] > 0:
                     percent = stats['success'] / stats['total'] * 100
                     text += f"• {target}: {stats['success']}/{stats['total']} ({percent:.1f}%)\n"
+            
+            # ========== ДОБАВЛЯЕМ ИНФО О ПРОПУСКЕ ==========
+            text += f"\n⏸ *ПРОПУСК СЛЕДУЮЩИХ 5 ИГР*\n"
+            text += f"   Чтобы избежать минусов после аномалии\n"
+            # ==============================================
             
             text += f"\n⏱ {datetime.now(pytz.timezone('Europe/Moscow')).strftime('%H:%M')} МСК"
             
