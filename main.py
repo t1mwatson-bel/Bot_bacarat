@@ -997,6 +997,18 @@ class MLPredictor:
         if len(self.history) >= 5:
             self.train_models()
         
+        # ========== ПРОВЕРКА НА АКТИВНЫЕ ПРОГНОЗЫ ==========
+        active_exists = False
+        for pred in self.active_predictions:
+            if pred['status'] in ['pending', 'active']:
+                active_exists = True
+                break
+        
+        if active_exists:
+            logger.info("⏳ Есть активный прогноз, новый не создаем")
+            return
+        # ===================================================
+        
         if not self.rate_limiter.can_send_prediction():
             logger.info("⏳ Пропускаем прогноз из-за ограничений частоты")
             return
@@ -1030,7 +1042,7 @@ class MLPredictor:
                 suit_joke = self._get_funny_comment('suit', suit=suit)
                 
                 message = (
-                    f"🎯 *ML ПРОГНОЗ #{pred_id}*\n"
+                    f"🎯 *ML v2.0 ПРОГНОЗ #{pred_id}*\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
                     f"📊 *ИСТОЧНИК:* #{game_data['game_num']} ({current_time} МСК)\n"
                     f"🎯 *ЦЕЛЬ:* #{next_game_num} ({next_time} МСК)\n"
@@ -1053,7 +1065,7 @@ class MLPredictor:
                 value_joke = self._get_funny_comment('value', value=int(pred['value']))
                 
                 message = (
-                    f"🎯 *ML ПРОГНОЗ #{pred_id}*\n"
+                    f"🎯 *ML v2.0 ПРОГНОЗ #{pred_id}*\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
                     f"📊 *ИСТОЧНИК:* #{game_data['game_num']} ({current_time} МСК)\n"
                     f"🎯 *ЦЕЛЬ:* #{next_game_num} ({next_time} МСК)\n"
@@ -1153,7 +1165,13 @@ class MLPredictor:
                 else:
                     if pred['attempt'] < 2:
                         pred['attempt'] += 1
-                        pred['target_game'] = pred['doggens'][pred['attempt']]
+                        new_target = pred['doggens'][pred['attempt']]
+                        # Проверка что новый догон БОЛЬШЕ текущего
+                        if new_target <= current_game_num:
+                            logger.warning(f"⚠️ Догон {new_target} <= текущей игры {current_game_num}, корректируем")
+                            new_target = current_game_num + 1
+                            pred['doggens'][pred['attempt']] = new_target
+                        pred['target_game'] = new_target
                         pred['status'] = 'pending'
                         await self._update_prediction_dogon(pred, context)
                     else:
@@ -1165,7 +1183,6 @@ class MLPredictor:
                 if pred['target_game'] != current_game_num:
                     continue
                 
-                # ИСПРАВЛЕНО: берем масти ТОЛЬКО из карт игрока
                 player_suits = [c['suit'] for c in game_data.get('player_cards', [])]
                 suit_map_rev = {0: '♥️', 1: '♦️', 2: '♠️', 3: '♣️'}
                 predicted_suit = suit_map_rev.get(int(pred['value']), '?')
@@ -1180,7 +1197,13 @@ class MLPredictor:
                 else:
                     if pred['attempt'] < 2:
                         pred['attempt'] += 1
-                        pred['target_game'] = pred['doggens'][pred['attempt']]
+                        new_target = pred['doggens'][pred['attempt']]
+                        # Проверка что новый догон БОЛЬШЕ текущего
+                        if new_target <= current_game_num:
+                            logger.warning(f"⚠️ Догон {new_target} <= текущей игры {current_game_num}, корректируем")
+                            new_target = current_game_num + 1
+                            pred['doggens'][pred['attempt']] = new_target
+                        pred['target_game'] = new_target
                         pred['status'] = 'pending'
                         await self._update_prediction_dogon(pred, context)
                     else:
@@ -1205,7 +1228,7 @@ class MLPredictor:
                 what = f"значение {card}"
             
             text = (
-                f"🔄 *ML ПРОГНОЗ #{pred['id']} — ДОГОН {pred['attempt']}*\n"
+                f"🔄 *ML v2.0 ПРОГНОЗ #{pred['id']} — ДОГОН {pred['attempt']}*\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
                 f"📊 *ИСТОЧНИК:* #{pred['source_game']}\n"
                 f"🎯 *ЦЕЛЬ:* #{pred['target_game']}\n"
@@ -1261,7 +1284,7 @@ class MLPredictor:
             attempt_names = ["основная", "догон 1", "догон 2"]
             
             text = (
-                f"{emoji} *ML ПРОГНОЗ #{pred['id']} {status}!*\n"
+                f"{emoji} *ML v2.0 ПРОГНОЗ #{pred['id']} {status}!*\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
                 f"📊 *ИСТОЧНИК:* #{pred['source_game']}\n"
                 f"🎯 *ЦЕЛЬ:* #{pred['target_game']}\n"
@@ -1327,7 +1350,7 @@ class MLPredictor:
     async def send_statistics_chart(self, context):
         try:
             fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-            fig.suptitle('ML Статистика', fontsize=16)
+            fig.suptitle('ML v2.0 Статистика', fontsize=16)
             
             ax1 = axes[0, 0]
             targets = ['suit', 'value']
@@ -1396,7 +1419,7 @@ class MLPredictor:
             await context.bot.send_photo(
                 chat_id=OUTPUT_CHANNEL_ID,
                 photo=buf,
-                caption=f"📊 *ML Статистика*\n⏱ {datetime.now(pytz.timezone('Europe/Moscow')).strftime('%H:%M')} МСК",
+                caption=f"📊 *ML v2.0 Статистика*\n⏱ {datetime.now(pytz.timezone('Europe/Moscow')).strftime('%H:%M')} МСК",
                 parse_mode='Markdown'
             )
             
@@ -1419,7 +1442,7 @@ async def auto_train(context: ContextTypes.DEFAULT_TYPE):
             
             stats = ml.predictions_stats
             text = (
-                f"🤖 *Ежедневное переобучение*\n"
+                f"🤖 *Ежедневное переобучение ML v2.0*\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"📊 Модели обновлены\n"
                 f"📈 Всего игр в истории: {len(ml.history)}\n"
@@ -1634,7 +1657,7 @@ async def daily_stats(context: ContextTypes.DEFAULT_TYPE):
                 ml_text += f"  по попыткам: осн:{attempts.get('attempt_0',0)} д1:{attempts.get('attempt_1',0)} д2:{attempts.get('attempt_2',0)}\n"
     
     text = (
-        f"📊 *ML СТАТИСТИКА*\n"
+        f"📊 *ML v2.0 СТАТИСТИКА*\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"{ml_text}\n"
         f"📊 Всего игр в истории: {len(storage.ml_predictor.history)}\n"
@@ -1764,7 +1787,7 @@ async def check_stuck_games(context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     print("\n" + "="*60)
-    print("🤖 ML БОТ С УМНЫМ ДОГОНОМ И ЧЕРЕДОВАНИЕМ")
+    print("🤖 ML v2.0 БОТ С УМНЫМ ДОГОНОМ И ЧЕРЕДОВАНИЕМ")
     print("="*60)
     print("✅ АНАЛИЗ МАСТЕЙ игрока и банкира")
     print("✅ СОМНИТЕЛЬНЫЕ СИТУАЦИИ - пропускаем ход")
