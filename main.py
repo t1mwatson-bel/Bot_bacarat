@@ -553,9 +553,6 @@ def main():
         release_lock()
         sys.exit(1)
     
-    # Создаём папку для моделей
-    os.makedirs('ml_models', exist_ok=True)
-    
     storage = SelfLearningBot()
     
     app = Application.builder().token(TOKEN).build()
