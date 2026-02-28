@@ -37,13 +37,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ======== НАСТРОЙКИ ========
-TOKEN = os.environ.get('BOT_TOKEN')
-INPUT_CHANNEL_ID = int(os.environ.get('INPUT_CHANNEL_ID', '0'))
-OUTPUT_CHANNEL_ID = int(os.environ.get('OUTPUT_CHANNEL_ID', '0'))
-
-if not TOKEN or not INPUT_CHANNEL_ID or not OUTPUT_CHANNEL_ID:
-    logger.error("❌ Не все переменные окружения заданы!")
-    sys.exit(1)
+TOKEN = "5482422004:AAHXLYyZ-qoCsycse1k9Qt6YRi9jmB24B-k"
+INPUT_CHANNEL_ID = -1003469691743
+OUTPUT_CHANNEL_ID = -1003855079501
 
 LOCK_FILE = f'/tmp/ml_bot_{TOKEN[-10:]}.lock'
 
@@ -174,6 +170,7 @@ class SelfLearningBot:
         self.prediction_counter = 0
         self.stats = {'total': 0, 'success': 0}
         self.skip_until_game = 0
+        self.last_game_num = 0
         
     def load_memory(self):
         try:
@@ -204,8 +201,21 @@ class SelfLearningBot:
             return []
         
         game_num = game_data['game_num']
+        
+        # ========== ЗАЩИТА ОТ СБРОСА СЧЁТЧИКА ==========
+        # Если номер игры резко упал (было 1440, стало 1)
+        if self.games and max(self.games.keys()) > game_num + 1000:
+            logger.warning(f"⚠️ Обнаружен сброс счётчика! Было {max(self.games.keys())}, стало {game_num}")
+            logger.info("🧹 Очищаю старую историю...")
+            self.games.clear()
+            self.history.clear()
+            self.active_predictions.clear()
+            self.memory = {'patterns': {}, 'situations': {}}
+        # ===============================================
+        
         self.games[game_num] = game_data
         self.history.append(game_data)
+        self.last_game_num = game_num
         
         # Проверяем аномалии
         anomalies = []
@@ -278,14 +288,14 @@ class SelfLearningBot:
             msg = (
                 f"🎯 Прогноз #{pid} — масть {val}\n"
                 f"📊 Уверенность: {int(pred['confidence']*100)}%\n"
-                f"🔄 Цели: #{dogons[0]}, #{dogons[1]}, #{dogons[2]}"
+                f"🔄 Догоны: #{dogons[0]}, #{dogons[1]}, #{dogons[2]}"
             )
         else:
             card = self.number_to_card(pred['value'])
             msg = (
                 f"🎯 Прогноз #{pid} — значение {pred['value']} ({card})\n"
                 f"📊 Уверенность: {int(pred['confidence']*100)}%\n"
-                f"🔄 Цели: #{dogons[0]}, #{dogons[1]}, #{dogons[2]}"
+                f"🔄 Догоны: #{dogons[0]}, #{dogons[1]}, #{dogons[2]}"
             )
         
         sent = await context.bot.send_message(chat_id=OUTPUT_CHANNEL_ID, text=msg)
@@ -301,16 +311,9 @@ class SelfLearningBot:
             'confidence': pred['confidence']
         })
         
-        logger.info(f"📤 Прогноз #{pid} на игру #{dogons[0]}")
+        logger.info(f"📤 Прогноз #{pid}")
     
     async def check_predictions(self, game_num, game_data, context):
-        """Проверяет активные прогнозы по завершённой игре"""
-        
-        # Проверяем что игра завершена (есть третья карта если нужна)
-        if game_data.get('player_draws') or game_data.get('banker_draws'):
-            logger.info(f"⏳ Игра #{game_num}: неполная версия, пропускаем проверку")
-            return
-        
         for p in self.active_predictions:
             if p['status'] != 'pending':
                 continue
@@ -356,7 +359,7 @@ class SelfLearningBot:
                     message_id=p['msg_id'],
                     text=f"✅ Прогноз #{p['id']} — {pred_info} ЗАШЁЛ в игре #{game_num}!"
                 )
-                logger.info(f"✅ Прогноз #{p['id']} зашёл в игре #{game_num}")
+                logger.info(f"✅ Прогноз #{p['id']} зашёл")
             else:
                 if p['attempt'] < 2:
                     p['attempt'] += 1
@@ -367,7 +370,7 @@ class SelfLearningBot:
                         message_id=p['msg_id'],
                         text=f"🔄 Прогноз #{p['id']} — {pred_info}, догон {p['attempt']+1} (цель #{p['games'][p['attempt']]})"
                     )
-                    logger.info(f"🔄 Прогноз #{p['id']} догон {p['attempt']+1} на игру #{p['games'][p['attempt']]}")
+                    logger.info(f"🔄 Прогноз #{p['id']} догон {p['attempt']+1}")
                 else:
                     p['status'] = 'loss'
                     await context.bot.edit_message_text(
@@ -412,7 +415,6 @@ def release_lock():
         except:
             pass
 
-# ======== ПРОВЕРКА ТОКЕНА ========
 def check_bot_token():
     try:
         url = f"https://api.telegram.org/bot{TOKEN}/getMe"
@@ -472,12 +474,11 @@ async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         storage.games[game_num] = game_data
         
-        # Если это редактирование - просто обновляем
+        # Если это редактирование - проверяем прогнозы
         if is_edit:
             logger.info(f"✏️ Редактирование игры #{game_num}")
             if game_num in pending_games:
                 del pending_games[game_num]
-            # Проверяем прогнозы
             await storage.check_predictions(game_num, game_data, context)
             return
         
@@ -514,21 +515,9 @@ async def handle_new_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ======== СТАТИСТИКА ========
 async def daily_stats(context: ContextTypes.DEFAULT_TYPE):
     if storage:
-        total = storage.stats['total']
-        success = storage.stats['success']
-        percent = int(success / max(1, total) * 100) if total > 0 else 0
-        
         await context.bot.send_message(
             chat_id=OUTPUT_CHANNEL_ID,
-            text=(
-                f"📊 *СТАТИСТИКА*\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"📈 Всего прогнозов: {total}\n"
-                f"✅ Зашло: {success}\n"
-                f"📊 Процент: {percent}%\n"
-                f"🧠 В истории: {len(storage.history)} игр"
-            ),
-            parse_mode='Markdown'
+            text=f"📊 Статистика: {storage.stats['success']}/{storage.stats['total']}"
         )
 
 # ======== ПРОВЕРКА ЗАВИСШИХ ========
@@ -554,6 +543,7 @@ def main():
     print("✅ Проверяет масти только у игрока")
     print("✅ Учитывает все карты")
     print("✅ Сам учится на ошибках")
+    print("✅ Защита от сброса счётчика")
     print("="*60)
     
     if not acquire_lock():
@@ -563,15 +553,8 @@ def main():
         release_lock()
         sys.exit(1)
     
-    # Создаём папку для моделей, игнорируем если уже есть
-    try:
-        os.makedirs('ml_models', exist_ok=True)
-        logger.info("📁 Папка ml_models создана")
-    except FileExistsError:
-        # Папка уже существует - это нормально
-        logger.info("📁 Папка ml_models уже существует")
-    except Exception as e:
-        logger.error(f"❌ Ошибка при создании папки: {e}")
+    # Создаём папку для моделей
+    os.makedirs('ml_models', exist_ok=True)
     
     storage = SelfLearningBot()
     
@@ -587,7 +570,7 @@ def main():
         job_queue.run_daily(daily_stats, time=time(23, 59, 0))
         job_queue.run_repeating(check_stuck_games, interval=30, first=10)
     
-    logger.info("🚀 Бот запущен и готов к работе")
+    logger.info("🚀 Бот запущен")
     
     try:
         app.run_polling(
