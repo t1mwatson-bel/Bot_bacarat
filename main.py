@@ -202,16 +202,31 @@ class SelfLearningBot:
         
         game_num = game_data['game_num']
         
-        # ========== ЗАЩИТА ОТ СБРОСА СЧЁТЧИКА ==========
-        # Если номер игры резко упал (было 1440, стало 1)
-        if self.games and max(self.games.keys()) > game_num + 1000:
-            logger.warning(f"⚠️ Обнаружен сброс счётчика! Было {max(self.games.keys())}, стало {game_num}")
-            logger.info("🧹 Очищаю старую историю...")
+        # ========== УСИЛЕННАЯ ЗАЩИТА ОТ СБРОСА СЧЁТЧИКА ==========
+        # Проверяем по номеру игры
+        if self.games and max(self.games.keys()) > 1000 and game_num < 100:
+            logger.warning(f"⚠️ Обнаружен сброс счётчика! Очищаю историю...")
             self.games.clear()
             self.history.clear()
             self.active_predictions.clear()
             self.memory = {'patterns': {}, 'situations': {}}
-        # ===============================================
+            self.skip_until_game = 0
+            self.prediction_counter = 0
+            logger.info("✅ История очищена, бот готов к новому циклу")
+        
+        # Проверяем по времени последней игры
+        elif self.history:
+            last_game_time = self.history[-1].get('timestamp')
+            if last_game_time and (datetime.now(pytz.timezone('Europe/Moscow')) - last_game_time).seconds > 3600:
+                if self.games and max(self.games.keys()) > game_num:
+                    logger.warning(f"⚠️ Обнаружен сброс по времени! Очищаю историю...")
+                    self.games.clear()
+                    self.history.clear()
+                    self.active_predictions.clear()
+                    self.memory = {'patterns': {}, 'situations': {}}
+                    self.skip_until_game = 0
+                    self.prediction_counter = 0
+        # =======================================================
         
         self.games[game_num] = game_data
         self.history.append(game_data)
@@ -543,7 +558,7 @@ def main():
     print("✅ Проверяет масти только у игрока")
     print("✅ Учитывает все карты")
     print("✅ Сам учится на ошибках")
-    print("✅ Защита от сброса счётчика")
+    print("✅ Усиленная защита от сброса счётчика")
     print("="*60)
     
     if not acquire_lock():
