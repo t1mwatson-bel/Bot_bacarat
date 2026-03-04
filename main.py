@@ -27,11 +27,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Масти по порядку (твой цикл 1-720)
 SUITS = ['♠️', '♥️', '♦️', '♣️']
 
 def get_suit_by_game(game_num):
-    """Возвращает масть для номера игры (цикл 1-720)"""
     pos = (game_num - 1) % 720
     return SUITS[pos % 4]
 
@@ -97,18 +95,6 @@ class PredictionBot:
                 del self.active_predictions[target]
 
         return results
-
-    def get_stats(self):
-        win_rate = 0
-        if self.stats['total'] > 0:
-            win_rate = int(self.stats['wins'] / self.stats['total'] * 100)
-        return {
-            'total': self.stats['total'],
-            'wins': self.stats['wins'],
-            'losses': self.stats['losses'],
-            'win_rate': win_rate,
-            'active': len(self.active_predictions)
-        }
 
 bot = PredictionBot()
 lock_fd = None
@@ -261,12 +247,8 @@ async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not text:
             return
 
-        # 🔥 Отладка: видим все сообщения
-        logger.info(f"🔥 Получено: {text[:100]}")
-
         game_data = parse_game_data(text)
         if not game_data:
-            logger.warning("⚠️ Не удалось распарсить игру")
             return
 
         game_num = game_data['game_num']
@@ -290,8 +272,7 @@ async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             text=text,
                             parse_mode='Markdown'
                         )
-                    except Exception as e:
-                        logger.error(f"Ошибка редактирования: {e}")
+                    except:
                         await context.bot.send_message(
                             chat_id=OUTPUT_CHANNEL_ID,
                             text=text,
@@ -313,8 +294,8 @@ async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             text=format_prediction(pred),
                             parse_mode='Markdown'
                         )
-                    except Exception as e:
-                        logger.error(f"Ошибка редактирования догона: {e}")
+                    except:
+                        pass
 
         next_target = game_num + 1
         if next_target not in bot.active_predictions:
@@ -327,12 +308,8 @@ async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             pred['msg_id'] = msg.message_id
 
-        if game_num % 100 == 0:
-            stats = bot.get_stats()
-            logger.info(f"📊 Статистика: {stats['wins']}/{stats['total']} ({stats['win_rate']}%)")
-
     except Exception as e:
-        logger.error(f"❌ Ошибка в handle_game: {e}", exc_info=True)
+        logger.error(f"❌ Ошибка: {e}", exc_info=True)
 
 def main():
     print("\n" + "="*60)
