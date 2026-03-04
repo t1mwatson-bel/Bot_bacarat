@@ -385,6 +385,8 @@ def main():
     ))
     
     if app.job_queue:
+        # Статистика пока отключена
+        pass
     
     try:
         app.run_polling(
