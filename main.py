@@ -16,7 +16,7 @@ import pytz
 
 # ======== НАСТРОЙКИ ========
 TOKEN = "5482422004:AAHXLYyZ-qoCsycse1k9Qt6YRi9jmB24B-k"
-INPUT_CHANNEL_ID = -1003855079501
+INPUT_CHANNEL_ID = -1003179573402
 OUTPUT_CHANNEL_ID = -1003855079501
 LOCK_FILE = '/tmp/predict_bot.lock'
 # ===========================
