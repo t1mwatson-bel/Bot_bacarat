@@ -4,8 +4,7 @@ import re
 import os
 import sys
 import fcntl
-import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -53,7 +52,7 @@ class PredictionBot:
         pred = {
             'id': pid,
             'source': source_game,
-            'targets': [target, target+1, target+2],  # 3 попытки подряд
+            'targets': [target, target+1, target+2],
             'suit': suit,
             'attempt': 0,
             'status': 'pending',
@@ -68,15 +67,11 @@ class PredictionBot:
         """Проверяет игру по всем активным прогнозам"""
         results = []
         
-        # Ищем прогнозы, которые ждут эту игру
         for target, pred in list(self.active_predictions.items()):
             if target != game_num:
                 continue
             
-            # Получаем масти игрока
             player_suits = [c['suit'] for c in game_data.get('player_cards', [])]
-            
-            # Проверяем наличие нужной масти
             win = pred['suit'] in player_suits
             
             if win:
@@ -87,7 +82,7 @@ class PredictionBot:
                 logger.info(f"✅ Прогноз #{pred['id']} зашёл в игре #{game_num}")
                 del self.active_predictions[target]
             
-            elif pred['attempt'] < 2:  # Есть ещё догоны
+            elif pred['attempt'] < 2:
                 pred['attempt'] += 1
                 next_target = pred['targets'][pred['attempt']]
                 self.active_predictions[next_target] = pred
@@ -95,7 +90,7 @@ class PredictionBot:
                 results.append(('dogon', pred))
                 logger.info(f"🔄 Прогноз #{pred['id']} догон {pred['attempt']} на игру #{next_target}")
             
-            else:  # Все догоны исчерпаны
+            else:
                 pred['status'] = 'loss'
                 self.stats['losses'] += 1
                 self.stats['total'] += 1
@@ -104,20 +99,7 @@ class PredictionBot:
                 del self.active_predictions[target]
         
         return results
-    
-    def get_stats(self):
-        win_rate = 0
-        if self.stats['total'] > 0:
-            win_rate = int(self.stats['wins'] / self.stats['total'] * 100)
-        return {
-            'total': self.stats['total'],
-            'wins': self.stats['wins'],
-            'losses': self.stats['losses'],
-            'win_rate': win_rate,
-            'active': len(self.active_predictions)
-        }
 
-# Глобальный экземпляр
 bot = PredictionBot()
 lock_fd = None
 
@@ -162,19 +144,13 @@ def parse_game_data(text):
         return None
     
     game_num = int(match.group(1))
-    
-    # Определяем завершена ли игра
     is_complete = '✅' in text or '🟩' in text or '🔰' in text
-    
-    # Определяем доборы
     player_draws = '👈' in text
     banker_draws = '👉' in text
     
-    # Собираем карты игрока и банкира
     player_cards = []
     banker_cards = []
     
-    # Ищем карты в левой части (игрок)
     left_part = text
     if '👈' in text:
         left_part = text.split('👈')[0]
@@ -183,14 +159,12 @@ def parse_game_data(text):
     
     card_pattern = r'(\d+|A|J|Q|K)\s*([♥️♦️♠️♣️])'
     
-    # Карты игрока
     for match in re.finditer(card_pattern, left_part):
         value, suit = match.groups()
         suit = normalize_suit(suit)
         if suit:
             player_cards.append({'value': value, 'suit': suit})
     
-    # Карты банкира (правая часть)
     if '👈' in text and '👉' in text:
         parts = text.split('👈')[1]
         if '👉' in parts:
@@ -212,7 +186,6 @@ def parse_game_data(text):
 
 def format_prediction(pred):
     """Форматирует прогноз для отправки"""
-    attempt_names = ['первая попытка', 'догон 1', 'догон 2']
     current_target = pred['targets'][pred['attempt']]
     
     if pred['attempt'] == 0:
@@ -222,8 +195,8 @@ def format_prediction(pred):
             f"Игра #{pred['source']} → прогноз на #{current_target}\n"
             f"🃏 *Масть:* {pred['suit']}\n\n"
             f"🔄 *Догоны:*\n"
-            f"  • #{pred['targets'][1]} (если не зайдёт)\n"
-            f"  • #{pred['targets'][2]} (если не зайдёт)\n\n"
+            f"  • #{pred['targets'][1]}\n"
+            f"  • #{pred['targets'][2]}\n\n"
             f"⏱ {datetime.now(pytz.timezone('Europe/Moscow')).strftime('%H:%M')} МСК"
         )
     else:
@@ -243,7 +216,7 @@ def format_result(pred, result_type):
         text = (
             f"✅ *ПРОГНОЗ #{pred['id']} ЗАШЁЛ!*\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"🎯 Масть {pred['suit']} появилась в игре #{pred['targets'][pred['attempt']]}\n"
+            f"🎯 Масть {pred['suit']} в игре #{pred['targets'][pred['attempt']]}\n"
             f"📊 Попытка: {pred['attempt'] + 1}/3\n\n"
             f"⏱ {datetime.now(pytz.timezone('Europe/Moscow')).strftime('%H:%M')} МСК"
         )
@@ -259,7 +232,6 @@ def format_result(pred, result_type):
 async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает новую игру"""
     try:
-        # Получаем сообщение
         if update.channel_post:
             message = update.channel_post
         elif update.edited_channel_post:
@@ -271,7 +243,6 @@ async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not text:
             return
         
-        # Парсим игру
         game_data = parse_game_data(text)
         if not game_data:
             return
@@ -279,11 +250,9 @@ async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
         game_num = game_data['game_num']
         logger.info(f"📥 Игра #{game_num}: завершена={game_data['is_complete']}")
         
-        # Проверяем только завершённые игры
         if not game_data['is_complete']:
             return
         
-        # Проверяем активные прогнозы
         results = bot.check_game(game_num, game_data)
         
         for result in results:
@@ -324,8 +293,6 @@ async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except:
                         pass
         
-        # Создаём новый прогноз на следующую игру
-        # Только если нет активного прогноза на этот номер
         next_target = game_num + 1
         if next_target not in bot.active_predictions:
             pred = bot.add_prediction(game_num)
@@ -337,32 +304,12 @@ async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             pred['msg_id'] = msg.message_id
         
-        # Очистка старых игр (не обязательно)
         if game_num % 100 == 0:
             stats = bot.get_stats()
             logger.info(f"📊 Статистика: {stats['wins']}/{stats['total']} ({stats['win_rate']}%)")
     
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}", exc_info=True)
-
-async def post_stats(context: ContextTypes.DEFAULT_TYPE):
-    """Постит статистику раз в сутки"""
-    stats = bot.get_stats()
-    text = (
-        f"📊 *СТАТИСТИКА ПРОГНОЗОВ*\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"Всего: {stats['total']}\n"
-        f"✅ Зашло: {stats['wins']}\n"
-        f"❌ Не зашло: {stats['losses']}\n"
-        f"📈 Процент: {stats['win_rate']}%\n"
-        f"🎯 Активных: {stats['active']}\n\n"
-        f"⏱ {datetime.now(pytz.timezone('Europe/Moscow')).strftime('%H:%M')} МСК"
-    )
-    await context.bot.send_message(
-        chat_id=OUTPUT_CHANNEL_ID,
-        text=text,
-        parse_mode='Markdown'
-    )
 
 def main():
     print("\n" + "="*60)
