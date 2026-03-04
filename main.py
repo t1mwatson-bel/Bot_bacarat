@@ -149,42 +149,54 @@ def normalize_suit(s):
     return None
 
 def parse_game_data(text):
+    """Парсит игру из текста сообщения (формат Statistic_21_classic)"""
     match = re.search(r'#N(\d+)', text)
     if not match:
         return None
-
+    
     game_num = int(match.group(1))
-    is_complete = '✅' in text or '🟩' in text or '🔰' in text
+    
+    # Игра считается завершённой, если есть ☑️ или теги победителя
+    is_complete = '☑️' in text or '#П1' in text or '#П2' in text or '#НИЧЬЯ' in text
+    
+    # Доборы (👈 👉) — оставляем как есть
     player_draws = '👈' in text
     banker_draws = '👉' in text
-
+    
     player_cards = []
     banker_cards = []
-
+    
+    # Разделяем левую и правую часть по 👈 или 👉
     left_part = text
-    if '👈' in text:
+    right_part = ""
+    
+    if '👈' in text and '👉' in text:
+        parts = text.split('👈')
+        left_part = parts[0]
+        if len(parts) > 1 and '👉' in parts[1]:
+            right_part = parts[1].split('👉')[1]
+    elif '👈' in text:
         left_part = text.split('👈')[0]
     elif '👉' in text:
         left_part = text.split('👉')[0]
-
-    card_pattern = r'(\d+|A|J|Q|K)\s*([♥️♦️♠️♣️])'
-
+    
+    # Паттерн для поиска карт: цифра или буква + масть
+    card_pattern = r'(\d+|J|Q|K|A)\s*([♥️♦️♠️♣️])'
+    
+    # Карты игрока (из левой части)
     for match in re.finditer(card_pattern, left_part):
         value, suit = match.groups()
         suit = normalize_suit(suit)
         if suit:
             player_cards.append({'value': value, 'suit': suit})
-
-    if '👈' in text and '👉' in text:
-        parts = text.split('👈')[1]
-        if '👉' in parts:
-            right_part = parts.split('👉')[1]
-            for match in re.finditer(card_pattern, right_part):
-                value, suit = match.groups()
-                suit = normalize_suit(suit)
-                if suit:
-                    banker_cards.append({'value': value, 'suit': suit})
-
+    
+    # Карты банкира (из правой части)
+    for match in re.finditer(card_pattern, right_part):
+        value, suit = match.groups()
+        suit = normalize_suit(suit)
+        if suit:
+            banker_cards.append({'value': value, 'suit': suit})
+    
     return {
         'game_num': game_num,
         'is_complete': is_complete,
