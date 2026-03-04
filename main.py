@@ -37,18 +37,17 @@ def get_suit_by_game(game_num):
 
 class PredictionBot:
     def __init__(self):
-        self.active_predictions = {}  # game_num -> prediction
+        self.active_predictions = {}
         self.prediction_counter = 0
         self.stats = {'total': 0, 'wins': 0, 'losses': 0}
-    
+
     def add_prediction(self, source_game):
-        """Создаёт прогноз на source_game + 1"""
         target = source_game + 1
         suit = get_suit_by_game(target)
-        
+
         self.prediction_counter += 1
         pid = self.prediction_counter
-        
+
         pred = {
             'id': pid,
             'source': source_game,
@@ -58,22 +57,22 @@ class PredictionBot:
             'status': 'pending',
             'msg_id': None
         }
-        
+
         self.active_predictions[target] = pred
         logger.info(f"📊 Прогноз #{pid}: игра #{target} -> {suit}")
         return pred
-    
+
     def check_game(self, game_num, game_data):
-        """Проверяет игру по всем активным прогнозам"""
         results = []
-        
+
         for target, pred in list(self.active_predictions.items()):
             if target != game_num:
                 continue
-            
+
+            # Проверяем масти только у игрока
             player_suits = [c['suit'] for c in game_data.get('player_cards', [])]
             win = pred['suit'] in player_suits
-            
+
             if win:
                 pred['status'] = 'win'
                 self.stats['wins'] += 1
@@ -81,7 +80,7 @@ class PredictionBot:
                 results.append(('win', pred))
                 logger.info(f"✅ Прогноз #{pred['id']} зашёл в игре #{game_num}")
                 del self.active_predictions[target]
-            
+
             elif pred['attempt'] < 2:
                 pred['attempt'] += 1
                 next_target = pred['targets'][pred['attempt']]
@@ -89,7 +88,7 @@ class PredictionBot:
                 del self.active_predictions[target]
                 results.append(('dogon', pred))
                 logger.info(f"🔄 Прогноз #{pred['id']} догон {pred['attempt']} на игру #{next_target}")
-            
+
             else:
                 pred['status'] = 'loss'
                 self.stats['losses'] += 1
@@ -97,8 +96,20 @@ class PredictionBot:
                 results.append(('loss', pred))
                 logger.info(f"❌ Прогноз #{pred['id']} не зашёл")
                 del self.active_predictions[target]
-        
+
         return results
+
+    def get_stats(self):
+        win_rate = 0
+        if self.stats['total'] > 0:
+            win_rate = int(self.stats['wins'] / self.stats['total'] * 100)
+        return {
+            'total': self.stats['total'],
+            'wins': self.stats['wins'],
+            'losses': self.stats['losses'],
+            'win_rate': win_rate,
+            'active': len(self.active_predictions)
+        }
 
 bot = PredictionBot()
 lock_fd = None
@@ -138,33 +149,32 @@ def normalize_suit(s):
     return None
 
 def parse_game_data(text):
-    """Парсит игру из текста сообщения"""
     match = re.search(r'#N(\d+)', text)
     if not match:
         return None
-    
+
     game_num = int(match.group(1))
     is_complete = '✅' in text or '🟩' in text or '🔰' in text
     player_draws = '👈' in text
     banker_draws = '👉' in text
-    
+
     player_cards = []
     banker_cards = []
-    
+
     left_part = text
     if '👈' in text:
         left_part = text.split('👈')[0]
     elif '👉' in text:
         left_part = text.split('👉')[0]
-    
+
     card_pattern = r'(\d+|A|J|Q|K)\s*([♥️♦️♠️♣️])'
-    
+
     for match in re.finditer(card_pattern, left_part):
         value, suit = match.groups()
         suit = normalize_suit(suit)
         if suit:
             player_cards.append({'value': value, 'suit': suit})
-    
+
     if '👈' in text and '👉' in text:
         parts = text.split('👈')[1]
         if '👉' in parts:
@@ -174,7 +184,7 @@ def parse_game_data(text):
                 suit = normalize_suit(suit)
                 if suit:
                     banker_cards.append({'value': value, 'suit': suit})
-    
+
     return {
         'game_num': game_num,
         'is_complete': is_complete,
@@ -185,9 +195,8 @@ def parse_game_data(text):
     }
 
 def format_prediction(pred):
-    """Форматирует прогноз для отправки"""
     current_target = pred['targets'][pred['attempt']]
-    
+
     if pred['attempt'] == 0:
         text = (
             f"🎯 *ПРОГНОЗ #{pred['id']}*\n"
@@ -211,7 +220,6 @@ def format_prediction(pred):
     return text
 
 def format_result(pred, result_type):
-    """Форматирует результат прогноза"""
     if result_type == 'win':
         text = (
             f"✅ *ПРОГНОЗ #{pred['id']} ЗАШЁЛ!*\n"
@@ -230,7 +238,6 @@ def format_result(pred, result_type):
     return text
 
 async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает новую игру"""
     try:
         if update.channel_post:
             message = update.channel_post
@@ -238,26 +245,26 @@ async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
             message = update.edited_channel_post
         else:
             return
-        
+
         text = message.text
         if not text:
             return
-        
+
         game_data = parse_game_data(text)
         if not game_data:
             return
-        
+
         game_num = game_data['game_num']
         logger.info(f"📥 Игра #{game_num}: завершена={game_data['is_complete']}")
-        
+
         if not game_data['is_complete']:
             return
-        
+
         results = bot.check_game(game_num, game_data)
-        
+
         for result in results:
             result_type, pred = result[0], result[1]
-            
+
             if result_type in ['win', 'loss']:
                 text = format_result(pred, result_type)
                 if pred.get('msg_id'):
@@ -280,7 +287,7 @@ async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         text=text,
                         parse_mode='Markdown'
                     )
-            
+
             elif result_type == 'dogon':
                 if pred.get('msg_id'):
                     try:
@@ -292,7 +299,7 @@ async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         )
                     except:
                         pass
-        
+
         next_target = game_num + 1
         if next_target not in bot.active_predictions:
             pred = bot.add_prediction(game_num)
@@ -303,11 +310,11 @@ async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode='Markdown'
             )
             pred['msg_id'] = msg.message_id
-        
+
         if game_num % 100 == 0:
             stats = bot.get_stats()
             logger.info(f"📊 Статистика: {stats['wins']}/{stats['total']} ({stats['win_rate']}%)")
-    
+
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}", exc_info=True)
 
@@ -318,19 +325,19 @@ def main():
     print(f"📥 Вход: {INPUT_CHANNEL_ID}")
     print(f"📤 Выход: {OUTPUT_CHANNEL_ID}")
     print("🔄 Масти: ♠️ ♥️ ♦️ ♣️ по кругу")
-    print("🎯 Прогноз: на следующую игру + 2 догона")
+    print("🎯 Прогноз: на следующую игру + 2 догона (только у игрока)")
     print("="*60 + "\n")
-    
+
     if not acquire_lock():
         sys.exit(1)
-    
+
     app = Application.builder().token(TOKEN).build()
-    
+
     app.add_handler(MessageHandler(
         filters.Chat(INPUT_CHANNEL_ID) & filters.TEXT,
         handle_game
     ))
-    
+
     try:
         app.run_polling(
             allowed_updates=['channel_post', 'edited_channel_post'],
@@ -345,7 +352,7 @@ if __name__ == "__main__":
         logger.info("👋 Бот останавливается...")
         release_lock()
         sys.exit(0)
-    
+
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     main()
