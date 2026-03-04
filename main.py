@@ -385,7 +385,6 @@ def main():
     ))
     
     if app.job_queue:
-        app.job_queue.run_daily(post_stats, time=datetime.timedelta(hours=23, minutes=59))
     
     try:
         app.run_polling(
