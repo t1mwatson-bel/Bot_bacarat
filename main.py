@@ -15,7 +15,7 @@ from telegram.ext import (
 import pytz
 
 # ======== НАСТРОЙКИ ========
-TOKEN = 5482422004:AAHXLYyZ-qoCsycse1k9Qt6YRi9jmB24B-k
+TOKEN = "5482422004:AAHXLYyZ-qoCsycse1k9Qt6YRi9jmB24B-k"
 INPUT_CHANNEL_ID = -1003855079501
 OUTPUT_CHANNEL_ID = -1003855079501
 LOCK_FILE = '/tmp/predict_bot.lock'
