@@ -384,10 +384,6 @@ def main():
         handle_game
     ))
     
-    if app.job_queue:
-        # Статистика пока отключена
-        pass
-    
     try:
         app.run_polling(
             allowed_updates=['channel_post', 'edited_channel_post'],
