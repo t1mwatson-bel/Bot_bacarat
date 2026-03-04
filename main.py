@@ -27,11 +27,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Масти по порядку
 SUITS = ['♠️', '♥️', '♦️', '♣️']
 
 def get_suit_by_game(game_num):
-    """Возвращает масть для номера игры (цикл 1-720)"""
     pos = (game_num - 1) % 720
     return SUITS[pos % 4]
 
@@ -97,18 +95,6 @@ class PredictionBot:
                 del self.active_predictions[target]
 
         return results
-
-    def get_stats(self):
-        win_rate = 0
-        if self.stats['total'] > 0:
-            win_rate = int(self.stats['wins'] / self.stats['total'] * 100)
-        return {
-            'total': self.stats['total'],
-            'wins': self.stats['wins'],
-            'losses': self.stats['losses'],
-            'win_rate': win_rate,
-            'active': len(self.active_predictions)
-        }
 
 bot = PredictionBot()
 lock_fd = None
@@ -321,10 +307,6 @@ async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode='Markdown'
             )
             pred['msg_id'] = msg.message_id
-
-        if game_num % 100 == 0:
-            stats = bot.get_stats()
-            logger.info(f"📊 Статистика: {stats['wins']}/{stats['total']} ({stats['win_rate']}%)")
 
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}", exc_info=True)
