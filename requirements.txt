@@ -1,1 +1,2 @@
-pip install -r requirements.txt
+python-telegram-bot==20.7
+pytz==2023.3
