@@ -63,15 +63,18 @@ class PredictionBot:
         return pred
 
     def check_game(self, game_num, game_data):
+        """Проверяет прогнозы по завершённой игре (ТОЛЬКО У ИГРОКА)"""
         results = []
 
         for target, pred in list(self.active_predictions.items()):
             if target != game_num:
                 continue
 
-            # Проверяем масти только у игрока
+            # Получаем масти ТОЛЬКО игрока (слева)
             player_suits = [c['suit'] for c in game_data.get('player_cards', [])]
             win = pred['suit'] in player_suits
+
+            logger.info(f"🔍 Проверка игры #{game_num}: нужна масть {pred['suit']}, у игрока {player_suits} -> {'✅' if win else '❌'}")
 
             if win:
                 pred['status'] = 'win'
@@ -180,6 +183,18 @@ def parse_game_data(text):
     elif '👉' in text:
         left_part = text.split('👉')[0]
     
+    # Если нет разделителей, пытаемся разделить по дефису
+    if not right_part and '-' in text:
+        parts = text.split('-', 1)
+        left_part = parts[0]
+        if len(parts) > 1:
+            # Отрезаем теги в конце
+            right_part = re.sub(r'#.*$', '', parts[1]).strip()
+    
+    # Очищаем от лишних символов
+    left_part = re.sub(r'#N\d+\s*', '', left_part)
+    left_part = re.sub(r'[☑️✅🟩🔰]', '', left_part)
+    
     # Паттерн для поиска карт: цифра или буква + масть
     card_pattern = r'(\d+|J|Q|K|A)\s*([♥️♦️♠️♣️])'
     
@@ -196,6 +211,9 @@ def parse_game_data(text):
         suit = normalize_suit(suit)
         if suit:
             banker_cards.append({'value': value, 'suit': suit})
+    
+    # Логируем результат парсинга для отладки
+    logger.info(f"🔍 Парсинг игры #{game_num}: игрок {[c['value']+c['suit'] for c in player_cards]}, банкир {[c['value']+c['suit'] for c in banker_cards]}")
     
     return {
         'game_num': game_num,
@@ -236,7 +254,7 @@ def format_result(pred, result_type):
         text = (
             f"✅ *ПРОГНОЗ #{pred['id']} ЗАШЁЛ!*\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"🎯 Масть {pred['suit']} в игре #{pred['targets'][pred['attempt']]}\n"
+            f"🎯 Масть {pred['suit']} у игрока в игре #{pred['targets'][pred['attempt']]}\n"
             f"📊 Попытка: {pred['attempt'] + 1}/3\n\n"
             f"⏱ {datetime.now(pytz.timezone('Europe/Moscow')).strftime('%H:%M')} МСК"
         )
@@ -244,7 +262,7 @@ def format_result(pred, result_type):
         text = (
             f"❌ *ПРОГНОЗ #{pred['id']} НЕ ЗАШЁЛ*\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"Масть {pred['suit']} не появилась за 3 игры\n\n"
+            f"Масть {pred['suit']} не появилась у игрока за 3 игры\n\n"
             f"⏱ {datetime.now(pytz.timezone('Europe/Moscow')).strftime('%H:%M')} МСК"
         )
     return text
@@ -287,7 +305,8 @@ async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             text=text,
                             parse_mode='Markdown'
                         )
-                    except:
+                    except Exception as e:
+                        logger.error(f"Ошибка редактирования: {e}")
                         await context.bot.send_message(
                             chat_id=OUTPUT_CHANNEL_ID,
                             text=text,
@@ -309,8 +328,8 @@ async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             text=format_prediction(pred),
                             parse_mode='Markdown'
                         )
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.error(f"Ошибка редактирования догона: {e}")
 
         next_target = game_num + 1
         if next_target not in bot.active_predictions:
@@ -328,7 +347,7 @@ async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"📊 Статистика: {stats['wins']}/{stats['total']} ({stats['win_rate']}%)")
 
     except Exception as e:
-        logger.error(f"❌ Ошибка: {e}", exc_info=True)
+        logger.error(f"❌ Ошибка в handle_game: {e}", exc_info=True)
 
 def main():
     print("\n" + "="*60)
@@ -337,7 +356,8 @@ def main():
     print(f"📥 Вход: {INPUT_CHANNEL_ID}")
     print(f"📤 Выход: {OUTPUT_CHANNEL_ID}")
     print("🔄 Масти: ♠️ ♥️ ♦️ ♣️ по кругу")
-    print("🎯 Прогноз: на следующую игру + 2 догона (только у игрока)")
+    print("🎯 Прогноз: на следующую игру + 2 догона")
+    print("✅ Проверка: ТОЛЬКО У ИГРОКА (слева)")
     print("="*60 + "\n")
 
     if not acquire_lock():
