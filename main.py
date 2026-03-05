@@ -26,14 +26,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ===== ТАБЛИЦА МАСТЕЙ (1-720) =====
-SUITS_CYCLE = ['♠️', '♥️', '♦️', '♣️']
-
-def get_suit_from_table(game_num):
-    """Возвращает масть по таблице для номера игры"""
-    pos = (game_num - 1) % 720
-    return SUITS_CYCLE[pos % 4]
-
 # ===== ПРОТИВОПОЛОЖНЫЕ МАСТИ =====
 OPPOSITE_SUITS = {
     '♥️': '♣️',
@@ -53,21 +45,13 @@ class Database:
             CREATE TABLE IF NOT EXISTS games (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 game_num INTEGER UNIQUE,
-                player_card1_value TEXT,
-                player_card1_suit TEXT,
-                player_card2_value TEXT,
-                player_card2_suit TEXT,
-                player_card3_value TEXT,
-                player_card3_suit TEXT,
+                player_cards TEXT,
+                dealer_cards TEXT,
                 player_score INTEGER,
-                dealer_card1_value TEXT,
-                dealer_card1_suit TEXT,
-                dealer_card2_value TEXT,
-                dealer_card2_suit TEXT,
-                dealer_card3_value TEXT,
-                dealer_card3_suit TEXT,
                 dealer_score INTEGER,
                 winner TEXT,
+                first_dealer_card_suit TEXT,
+                dealer_picture TEXT,
                 game_time TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -78,34 +62,19 @@ class Database:
         try:
             self.conn.execute('''
                 INSERT OR IGNORE INTO games (
-                    game_num, 
-                    player_card1_value, player_card1_suit,
-                    player_card2_value, player_card2_suit,
-                    player_card3_value, player_card3_suit,
-                    player_score,
-                    dealer_card1_value, dealer_card1_suit,
-                    dealer_card2_value, dealer_card2_suit,
-                    dealer_card3_value, dealer_card3_suit,
-                    dealer_score,
-                    winner, game_time
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    game_num, player_cards, dealer_cards,
+                    player_score, dealer_score, winner,
+                    first_dealer_card_suit, dealer_picture, game_time
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 game_data['game_num'],
-                game_data['player_cards'][0]['value'] if len(game_data['player_cards']) > 0 else None,
-                game_data['player_cards'][0]['suit'] if len(game_data['player_cards']) > 0 else None,
-                game_data['player_cards'][1]['value'] if len(game_data['player_cards']) > 1 else None,
-                game_data['player_cards'][1]['suit'] if len(game_data['player_cards']) > 1 else None,
-                game_data['player_cards'][2]['value'] if len(game_data['player_cards']) > 2 else None,
-                game_data['player_cards'][2]['suit'] if len(game_data['player_cards']) > 2 else None,
+                str(game_data['player_cards']),
+                str(game_data['dealer_cards']),
                 game_data['player_score'],
-                game_data['dealer_cards'][0]['value'] if len(game_data['dealer_cards']) > 0 else None,
-                game_data['dealer_cards'][0]['suit'] if len(game_data['dealer_cards']) > 0 else None,
-                game_data['dealer_cards'][1]['value'] if len(game_data['dealer_cards']) > 1 else None,
-                game_data['dealer_cards'][1]['suit'] if len(game_data['dealer_cards']) > 1 else None,
-                game_data['dealer_cards'][2]['value'] if len(game_data['dealer_cards']) > 2 else None,
-                game_data['dealer_cards'][2]['suit'] if len(game_data['dealer_cards']) > 2 else None,
                 game_data['dealer_score'],
                 game_data['winner'],
+                game_data['first_dealer_suit'],
+                game_data['dealer_picture'],
                 game_data['timestamp']
             ))
             self.conn.commit()
@@ -113,59 +82,6 @@ class Database:
         except Exception as e:
             logger.error(f"Ошибка сохранения игры: {e}")
             return False
-    
-    def check_bust_pattern(self, game_data):
-        """Проверяет, был ли перебор с третьей картой"""
-        if game_data['player_score'] > 21 and len(game_data['player_cards']) >= 3:
-            third_card = game_data['player_cards'][2]
-            if third_card and third_card.get('suit'):
-                return {
-                    'bust_suit': third_card['suit'],
-                    'predicted': OPPOSITE_SUITS[third_card['suit']],
-                    'target': game_data['game_num'] + 1
-                }
-        return None
-    
-    def get_previous_game(self, game_num):
-        """Получает предыдущую игру по номеру"""
-        cursor = self.conn.execute('''
-            SELECT * FROM games WHERE game_num = ?
-        ''', (game_num - 1,))
-        row = cursor.fetchone()
-        if row:
-            return self._row_to_game(row)
-        return None
-    
-    def _row_to_game(self, row):
-        """Преобразует строку БД в словарь игры"""
-        return {
-            'game_num': row[1],
-            'player_cards': self._extract_player_cards(row),
-            'dealer_cards': self._extract_dealer_cards(row),
-            'player_score': row[7],
-            'dealer_score': row[14],
-            'winner': row[15]
-        }
-    
-    def _extract_player_cards(self, row):
-        cards = []
-        if row[2] and row[3]:
-            cards.append({'value': row[2], 'suit': row[3]})
-        if row[4] and row[5]:
-            cards.append({'value': row[4], 'suit': row[5]})
-        if row[6] and row[7]:
-            cards.append({'value': row[6], 'suit': row[7]})
-        return cards
-    
-    def _extract_dealer_cards(self, row):
-        cards = []
-        if row[9] and row[10]:
-            cards.append({'value': row[9], 'suit': row[10]})
-        if row[11] and row[12]:
-            cards.append({'value': row[11], 'suit': row[12]})
-        if row[13] and row[14]:
-            cards.append({'value': row[13], 'suit': row[14]})
-        return cards
 
 # ===== ПАРСИНГ =====
 def normalize_suit(s):
@@ -254,6 +170,10 @@ def parse_game_data(text):
             i += 1
     
     # Парсим карты дилера
+    dealer_first_suit = None
+    dealer_picture = None
+    first_card = True
+    
     i = 0
     while i < len(right_part):
         if right_part[i].isspace():
@@ -278,7 +198,17 @@ def parse_game_data(text):
         if i < len(right_part):
             suit = normalize_suit(right_part[i])
             if suit:
-                dealer_cards.append({'value': value, 'suit': suit})
+                card = {'value': value, 'suit': suit}
+                dealer_cards.append(card)
+                
+                # Запоминаем первую карту дилера
+                if first_card:
+                    dealer_first_suit = suit
+                    first_card = False
+                
+                # Запоминаем картинку (только одну, первую попавшуюся)
+                if value in ['J', 'Q', 'K', 'A'] and not dealer_picture:
+                    dealer_picture = value
             i += 1
     
     # Счет
@@ -296,6 +226,8 @@ def parse_game_data(text):
         'player_score': player_score,
         'dealer_score': dealer_score,
         'winner': winner,
+        'first_dealer_suit': dealer_first_suit,
+        'dealer_picture': dealer_picture,
         'timestamp': datetime.now(pytz.timezone('Europe/Moscow'))
     }
 
@@ -303,50 +235,30 @@ def parse_game_data(text):
 class PredictionBot:
     def __init__(self, db):
         self.db = db
-        self.predictions = {}
+        self.predictions = {}  # target_game -> prediction
         self.next_id = 1
         self.stats = {'total': 0, 'wins': 0, 'losses': 0}
-        self.bust_pattern_stats = {'total': 0, 'hits': 0}
     
     def analyze_and_predict(self, game_data):
-        """Анализирует ситуацию и создает прогноз"""
-        target_game = game_data['game_num'] + 1
+        """Анализирует игру по твоему алгоритму"""
+        if not game_data['first_dealer_suit'] or not game_data['dealer_picture']:
+            logger.info("Нет данных для прогноза")
+            return None
         
-        # Проверяем, нет ли уже прогноза
+        # Целевая игра = текущая + очки игрока
+        target_game = game_data['game_num'] + game_data['player_score']
+        
+        # Проверяем, нет ли уже прогноза на эту цель
         if target_game in self.predictions:
             logger.info(f"Прогноз на игру #{target_game} уже есть")
             return None
         
-        # 1. Сначала смотрим на перебор в предыдущей игре
-        prev_game = self.db.get_previous_game(game_data['game_num'])
-        bust_pattern = None
-        if prev_game:
-            bust_pattern = self.db.check_bust_pattern(prev_game)
-        
-        # 2. Что говорит таблица
-        table_suit = get_suit_from_table(target_game)
-        
-        # 3. Выбираем масть
-        if bust_pattern and bust_pattern['predicted']:
-            # Если сработал паттерн перебора, используем его
-            suit = bust_pattern['predicted']
-            confidence = 80  # Доверие к паттерну
-            source = "паттерн перебора"
-            logger.info(f"🎯 Паттерн перебора: {bust_pattern['bust_suit']} -> {suit}")
-        else:
-            # Иначе просто таблица
-            suit = table_suit
-            confidence = 95
-            source = "таблица"
-        
-        # Создаем прогноз
         prediction = {
             'id': self.next_id,
             'source': game_data['game_num'],
             'targets': [target_game, target_game+1, target_game+2],
-            'suit': suit,
-            'confidence': confidence,
-            'source': source,
+            'player_suit': game_data['first_dealer_suit'],  # масть для игрока
+            'picture': game_data['dealer_picture'],          # картинка для стола
             'attempt': 0,
             'status': 'pending',
             'msg_id': None
@@ -354,7 +266,7 @@ class PredictionBot:
         
         self.predictions[target_game] = prediction
         self.next_id += 1
-        logger.info(f"📊 Прогноз #{prediction['id']}: игра #{target_game} -> {suit} ({source})")
+        logger.info(f"📊 Прогноз #{prediction['id']}: игра #{target_game}")
         return prediction
     
     def check_game(self, game_num, game_data):
@@ -363,16 +275,24 @@ class PredictionBot:
             if target != game_num:
                 continue
             
-            # Проверяем масть только у игрока
+            # Проверяем масть у игрока
             player_suits = [c['suit'] for c in game_data.get('player_cards', [])]
-            win = pred['suit'] in player_suits
+            suit_win = pred['player_suit'] in player_suits
             
-            # Если это был прогноз по паттерну перебора, обновляем статистику
-            if pred.get('source') == 'паттерн перебора':
-                self.bust_pattern_stats['total'] += 1
-                if win:
-                    self.bust_pattern_stats['hits'] += 1
-                logger.info(f"📊 Статистика паттерна: {self.bust_pattern_stats['hits']}/{self.bust_pattern_stats['total']}")
+            # Проверяем картинку на столе
+            all_values = []
+            for c in game_data.get('player_cards', []):
+                all_values.append(c['value'])
+            for c in game_data.get('dealer_cards', []):
+                all_values.append(c['value'])
+            picture_win = pred['picture'] in all_values
+            
+            # Прогноз выигрышный, если выполнены ОБА условия
+            win = suit_win and picture_win
+            
+            logger.info(f"🔍 Проверка #{game_num}: "
+                       f"масть {pred['player_suit']} у игрока = {suit_win}, "
+                       f"картинка {pred['picture']} на столе = {picture_win}")
             
             if win:
                 pred['status'] = 'win'
@@ -402,9 +322,12 @@ def format_prediction(pred):
     text = f"🎯 *ПРОГНОЗ #{pred['id']}*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
     text += f"📊 *Анализ игры* #{pred['source']}\n"
     text += f"🎯 *Цель:* игра #{pred['targets'][0]}\n\n"
-    text += f"🃏 *Масть:* {pred['suit']} (только у игрока)\n"
-    text += f"📈 Уверенность: {pred['confidence']}% (источник: {pred['source']})\n\n"
-    text += f"🔄 *Догоны:*\n  • #{pred['targets'][1]}\n  • #{pred['targets'][2]}\n\n"
+    text += f"👤 *У игрока:* масть {pred['player_suit']}\n"
+    text += f"🃏 *На столе:* картинка {pred['picture']}\n\n"
+    text += f"✅ *Оба условия должны выполниться*\n\n"
+    text += f"🔄 *Догоны:*\n"
+    text += f"  • #{pred['targets'][1]}\n"
+    text += f"  • #{pred['targets'][2]}\n\n"
     text += f"⏱ {datetime.now(pytz.timezone('Europe/Moscow')).strftime('%H:%M')} МСК"
     return text
 
@@ -412,18 +335,20 @@ def format_dogon(pred):
     text = f"🔄 *ДОГОН #{pred['id']}*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
     text += f"Попытка {pred['attempt'] + 1}/3\n"
     text += f"🎯 *Цель:* игра #{pred['targets'][pred['attempt']]}\n\n"
-    text += f"🃏 *Масть:* {pred['suit']}\n\n"
+    text += f"👤 *У игрока:* масть {pred['player_suit']}\n"
+    text += f"🃏 *На столе:* картинка {pred['picture']}\n\n"
     text += f"⏱ {datetime.now(pytz.timezone('Europe/Moscow')).strftime('%H:%M')} МСК"
     return text
 
 def format_result(pred, result_type):
     if result_type == 'win':
         text = f"✅ *ПРОГНОЗ #{pred['id']} ЗАШЁЛ!*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        text += f"🃏 Масть {pred['suit']} у игрока\n"
+        text += f"👤 Масть {pred['player_suit']} у игрока\n"
+        text += f"🃏 Картинка {pred['picture']} на столе\n"
         text += f"📊 Попытка: {pred['attempt'] + 1}/3\n\n"
     else:
         text = f"❌ *ПРОГНОЗ #{pred['id']} НЕ ЗАШЁЛ*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        text += f"🃏 Масть {pred['suit']} не появилась у игрока за 3 игры\n\n"
+        text += f"Условия не выполнены за 3 игры\n\n"
     
     text += f"⏱ {datetime.now(pytz.timezone('Europe/Moscow')).strftime('%H:%M')} МСК"
     return text
@@ -449,7 +374,10 @@ async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning("⚠️ Не удалось распарсить игру")
             return
         
-        logger.info(f"📊 Игра #{game_data['game_num']}")
+        logger.info(f"📊 Игра #{game_data['game_num']}: "
+                   f"очки игрока {game_data['player_score']}, "
+                   f"первая масть дилера {game_data['first_dealer_suit']}, "
+                   f"картинка дилера {game_data['dealer_picture']}")
         
         # Сохраняем в базу
         context.bot_data['db'].add_game(game_data)
@@ -515,14 +443,16 @@ async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     print("\n" + "="*60)
-    print("🤖 АНАЛИТИЧЕСКИЙ БОТ (ПЕРЕБОРНЫЙ ПАТТЕРН)")
+    print("🤖 АНАЛИТИЧЕСКИЙ БОТ (АЛГОРИТМ БРО)")
     print("="*60)
     print(f"📥 Вход: {INPUT_CHANNEL_ID}")
     print(f"📤 Выход: {OUTPUT_CHANNEL_ID}")
     print(f"💾 База: {DB_FILE}")
-    print("🎯 Приоритет: перебор игрока (противоположная масть в следующей игре)")
+    print("🎯 Правила:")
+    print("  • Цель = текущая игра + очки игрока")
+    print("  • Масть для игрока = первая карта дилера")
+    print("  • Картинка для стола = картинка дилера")
     print("🔄 Догоны: +2 игры")
-    print("✅ Проверка: только у игрока")
     print("="*60 + "\n")
     
     # Инициализация
