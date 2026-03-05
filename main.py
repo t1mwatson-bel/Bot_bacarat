@@ -291,6 +291,7 @@ class PredictionBot:
                     'type': 'suit',
                     'value': table_suit,
                     'confidence': 98,
+                    'samples': stat_prediction['samples'],
                     'source': 'гибрид (таблица + статистика)'
                 }
             elif table_accuracy > stat_prediction['confidence']:
@@ -299,6 +300,7 @@ class PredictionBot:
                     'type': 'suit',
                     'value': table_suit,
                     'confidence': table_accuracy,
+                    'samples': 720,
                     'source': 'таблица'
                 }
             else:
@@ -311,6 +313,7 @@ class PredictionBot:
                 'type': 'suit',
                 'value': table_suit,
                 'confidence': table_accuracy,
+                'samples': 720,
                 'source': 'таблица'
             }
         
@@ -426,15 +429,17 @@ def format_prediction(pred):
     
     if pred.get('suit_prediction'):
         sp = pred['suit_prediction']
-        text += f"🃏 *Масть:* {sp['value']}\n"
-        text += f"📈 Уверенность: {sp['confidence']:.1f}% (источник: {sp['source']})\n"
-        text += f"👤 Проверка: только у игрока\n\n"
+        suit_value = sp.get('value') if sp else None
+        if suit_value:
+            text += f"🃏 *Масть:* {suit_value} (только у игрока)\n"
+            text += f"📈 Уверенность: {sp.get('confidence', 0):.1f}% (источник: {sp.get('source', '?')})\n\n"
     
     if pred.get('value_prediction'):
         vp = pred['value_prediction']
-        text += f"🎴 *Значение:* {vp['value']}\n"
-        text += f"📈 Уверенность: {vp['confidence']:.1f}% (источник: {vp['source']})\n"
-        text += f"🔍 Проверка: везде на столе\n\n"
+        value_value = vp.get('value') if vp else None
+        if value_value:
+            text += f"🎴 *Значение:* {value_value} (везде на столе)\n"
+            text += f"📈 Уверенность: {vp.get('confidence', 0):.1f}% (источник: {vp.get('source', '?')})\n\n"
     
     text += f"🔄 *Догоны:*\n  • #{pred['targets'][1]}\n  • #{pred['targets'][2]}\n\n"
     text += f"⏱ {datetime.now(pytz.timezone('Europe/Moscow')).strftime('%H:%M')} МСК"
@@ -446,10 +451,14 @@ def format_dogon(pred):
     text += f"🎯 *Цель:* игра #{pred['targets'][pred['attempt']]}\n\n"
     
     if pred.get('suit_prediction'):
-        text += f"🃏 *Масть:* {pred['suit_prediction']['value']}\n"
+        suit_value = pred['suit_prediction'].get('value')
+        if suit_value:
+            text += f"🃏 *Масть:* {suit_value}\n"
     
     if pred.get('value_prediction'):
-        text += f"🎴 *Значение:* {pred['value_prediction']['value']}\n"
+        value_value = pred['value_prediction'].get('value')
+        if value_value:
+            text += f"🎴 *Значение:* {value_value}\n"
     
     text += f"\n⏱ {datetime.now(pytz.timezone('Europe/Moscow')).strftime('%H:%M')} МСК"
     return text
@@ -458,16 +467,24 @@ def format_result(pred, result_type):
     if result_type == 'win':
         text = f"✅ *ПРОГНОЗ #{pred['id']} ЗАШЁЛ!*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
         if pred.get('suit_prediction'):
-            text += f"🃏 Масть {pred['suit_prediction']['value']} у игрока\n"
+            suit_value = pred['suit_prediction'].get('value')
+            if suit_value:
+                text += f"🃏 Масть {suit_value} у игрока\n"
         if pred.get('value_prediction'):
-            text += f"🎴 Значение {pred['value_prediction']['value']} на столе\n"
+            value_value = pred['value_prediction'].get('value')
+            if value_value:
+                text += f"🎴 Значение {value_value} на столе\n"
         text += f"📊 Попытка: {pred['attempt'] + 1}/3\n\n"
     else:
         text = f"❌ *ПРОГНОЗ #{pred['id']} НЕ ЗАШЁЛ*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
         if pred.get('suit_prediction'):
-            text += f"🃏 Масть {pred['suit_prediction']['value']} не появилась у игрока\n"
+            suit_value = pred['suit_prediction'].get('value')
+            if suit_value:
+                text += f"🃏 Масть {suit_value} не появилась у игрока\n"
         if pred.get('value_prediction'):
-            text += f"🎴 Значение {pred['value_prediction']['value']} не появилось на столе\n"
+            value_value = pred['value_prediction'].get('value')
+            if value_value:
+                text += f"🎴 Значение {value_value} не появилось на столе\n"
         text += f"за 3 игры\n\n"
     
     text += f"⏱ {datetime.now(pytz.timezone('Europe/Moscow')).strftime('%H:%M')} МСК"
