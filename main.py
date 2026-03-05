@@ -265,13 +265,18 @@ def parse_game_data(text):
 class PredictionBot:
     def __init__(self, db):
         self.db = db
-        self.active_predictions = {}
+        self.active_predictions = {}  # target_game -> prediction
         self.prediction_counter = 0
         self.stats = {'total': 0, 'wins': 0, 'losses': 0}
     
     def analyze_and_predict(self, game_data):
         """Анализирует ситуацию и создает прогноз на масть и значение"""
         target_game = game_data['game_num'] + 1
+        
+        # Проверяем, нет ли уже прогноза на эту цель
+        if target_game in self.active_predictions:
+            logger.info(f"Прогноз на игру #{target_game} уже существует, пропускаем")
+            return None
         
         # ===== ПРОГНОЗ НА МАСТЬ (гибрид: таблица + статистика) =====
         # Что говорит таблица (95% точности)
@@ -532,18 +537,22 @@ async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             text=text,
                             parse_mode='Markdown'
                         )
-                    except:
-                        await context.bot.send_message(
+                        logger.info(f"✏️ Результат отредактирован в сообщении {pred['msg_id']}")
+                    except Exception as e:
+                        logger.error(f"Ошибка редактирования: {e}")
+                        msg = await context.bot.send_message(
                             chat_id=OUTPUT_CHANNEL_ID,
                             text=text,
                             parse_mode='Markdown'
                         )
+                        pred['msg_id'] = msg.message_id
                 else:
-                    await context.bot.send_message(
+                    msg = await context.bot.send_message(
                         chat_id=OUTPUT_CHANNEL_ID,
                         text=text,
                         parse_mode='Markdown'
                     )
+                    pred['msg_id'] = msg.message_id
             
             elif result_type == 'dogon':
                 if pred.get('msg_id'):
@@ -554,20 +563,25 @@ async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             text=format_dogon(pred),
                             parse_mode='Markdown'
                         )
-                    except:
-                        pass
+                        logger.info(f"✏️ Догон отредактирован в сообщении {pred['msg_id']}")
+                    except Exception as e:
+                        logger.error(f"Ошибка редактирования догона: {e}")
         
-        # Создаем новый прогноз
-        prediction = context.bot_data['predictor'].analyze_and_predict(game_data)
-        
-        if prediction:
-            text = format_prediction(prediction)
-            msg = await context.bot.send_message(
-                chat_id=OUTPUT_CHANNEL_ID,
-                text=text,
-                parse_mode='Markdown'
-            )
-            prediction['msg_id'] = msg.message_id
+        # Создаем новый прогноз только если его ещё нет
+        target_game = game_data['game_num'] + 1
+        if target_game not in context.bot_data['predictor'].active_predictions:
+            prediction = context.bot_data['predictor'].analyze_and_predict(game_data)
+            if prediction:
+                text = format_prediction(prediction)
+                msg = await context.bot.send_message(
+                    chat_id=OUTPUT_CHANNEL_ID,
+                    text=text,
+                    parse_mode='Markdown'
+                )
+                prediction['msg_id'] = msg.message_id
+                logger.info(f"🎯 Создан прогноз #{prediction['id']} на игру #{target_game}")
+        else:
+            logger.info(f"Прогноз на игру #{target_game} уже существует, пропускаем")
         
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}", exc_info=True)
