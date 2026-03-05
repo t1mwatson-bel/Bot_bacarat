@@ -34,15 +34,13 @@ def get_suit_from_table(game_num):
     pos = (game_num - 1) % 720
     return SUITS_CYCLE[pos % 4]
 
-# ===== ПАРНЫЙ СДВИГ ОТ ДИЛЕРА =====
-SUIT_PAIR_MAP = {
+# ===== ПРОТИВОПОЛОЖНЫЕ МАСТИ =====
+OPPOSITE_SUITS = {
     '♥️': '♣️',
-    '♦️': '♠️'
+    '♣️': '♥️',
+    '♦️': '♠️',
+    '♠️': '♦️'
 }
-
-def get_pair_suit(suit):
-    """Возвращает парную масть для сдвига"""
-    return SUIT_PAIR_MAP.get(suit, suit)
 
 # ===== БАЗА ДАННЫХ =====
 class Database:
@@ -115,6 +113,18 @@ class Database:
         except Exception as e:
             logger.error(f"Ошибка сохранения игры: {e}")
             return False
+    
+    def check_bust_pattern(self, game_data):
+        """Проверяет, был ли перебор с третьей картой"""
+        if game_data['player_score'] > 21 and len(game_data['player_cards']) >= 3:
+            third_card = game_data['player_cards'][2]
+            if third_card and third_card.get('suit'):
+                return {
+                    'bust_suit': third_card['suit'],
+                    'predicted': OPPOSITE_SUITS[third_card['suit']],
+                    'target': game_data['game_num'] + 1
+                }
+        return None
     
     def get_previous_game(self, game_num):
         """Получает предыдущую игру по номеру"""
@@ -296,9 +306,10 @@ class PredictionBot:
         self.predictions = {}
         self.next_id = 1
         self.stats = {'total': 0, 'wins': 0, 'losses': 0}
+        self.bust_pattern_stats = {'total': 0, 'hits': 0}
     
-    def analyze_all_factors(self, game_data):
-        """Анализирует все факторы и возвращает прогноз"""
+    def analyze_and_predict(self, game_data):
+        """Анализирует ситуацию и создает прогноз"""
         target_game = game_data['game_num'] + 1
         
         # Проверяем, нет ли уже прогноза
@@ -306,74 +317,36 @@ class PredictionBot:
             logger.info(f"Прогноз на игру #{target_game} уже есть")
             return None
         
-        # Получаем предыдущую игру
+        # 1. Сначала смотрим на перебор в предыдущей игре
         prev_game = self.db.get_previous_game(game_data['game_num'])
+        bust_pattern = None
+        if prev_game:
+            bust_pattern = self.db.check_bust_pattern(prev_game)
         
-        # 1. Базовая масть из таблицы
+        # 2. Что говорит таблица
         table_suit = get_suit_from_table(target_game)
         
-        if not prev_game:
-            # Если нет предыдущей игры, используем только таблицу
-            return self._create_prediction(game_data, table_suit, 95)
+        # 3. Выбираем масть
+        if bust_pattern and bust_pattern['predicted']:
+            # Если сработал паттерн перебора, используем его
+            suit = bust_pattern['predicted']
+            confidence = 80  # Доверие к паттерну
+            source = "паттерн перебора"
+            logger.info(f"🎯 Паттерн перебора: {bust_pattern['bust_suit']} -> {suit}")
+        else:
+            # Иначе просто таблица
+            suit = table_suit
+            confidence = 95
+            source = "таблица"
         
-        # Собираем все карты из предыдущей игры
-        all_cards = []
-        all_cards.extend(prev_game['player_cards'])
-        all_cards.extend(prev_game['dealer_cards'])
-        
-        # Считаем масти, которые уже вышли
-        used_suits = [c['suit'] for c in all_cards if c.get('suit')]
-        suit_counts = Counter(used_suits)
-        
-        # Определяем особые события
-        special_event = None
-        if prev_game['player_score'] == 21 or prev_game['dealer_score'] == 21:
-            special_event = 'blackjack'
-        elif prev_game['winner'] == 'tie':
-            special_event = 'tie'
-        elif prev_game['player_score'] > 21 or prev_game['dealer_score'] > 21:
-            special_event = 'bust'
-        
-        # Начинаем с таблицы
-        final_suit = table_suit
-        confidence = 95
-        
-        # Если масть из таблицы уже сильно использована
-        if suit_counts.get(table_suit, 0) >= 2:
-            # Две карты этой масти уже вышли — вероятность падает
-            confidence -= 20
-            # Ищем альтернативу среди редко использованных
-            for suit in ['♠️', '♥️', '♦️', '♣️']:
-                if suit_counts.get(suit, 0) == 0:
-                    final_suit = suit
-                    break
-        
-        # Учёт особых событий
-        if special_event == 'blackjack':
-            # При 21 часто выходят сильные карты
-            confidence -= 10
-        elif special_event == 'tie':
-            confidence -= 5
-        
-        # Проверка дилера (парный сдвиг)
-        dealer_suits = [c['suit'] for c in prev_game['dealer_cards'] if c.get('suit')]
-        if table_suit in dealer_suits:
-            # Если масть была у дилера — сдвигаем
-            final_suit = get_pair_suit(table_suit)
-            confidence = max(confidence - 10, 60)
-        
-        return self._create_prediction(game_data, final_suit, confidence)
-    
-    def _create_prediction(self, game_data, suit, confidence):
-        """Создает объект прогноза"""
-        target_game = game_data['game_num'] + 1
-        
+        # Создаем прогноз
         prediction = {
             'id': self.next_id,
             'source': game_data['game_num'],
             'targets': [target_game, target_game+1, target_game+2],
             'suit': suit,
             'confidence': confidence,
+            'source': source,
             'attempt': 0,
             'status': 'pending',
             'msg_id': None
@@ -381,7 +354,7 @@ class PredictionBot:
         
         self.predictions[target_game] = prediction
         self.next_id += 1
-        logger.info(f"📊 Прогноз #{prediction['id']}: игра #{target_game} -> {suit}")
+        logger.info(f"📊 Прогноз #{prediction['id']}: игра #{target_game} -> {suit} ({source})")
         return prediction
     
     def check_game(self, game_num, game_data):
@@ -393,6 +366,13 @@ class PredictionBot:
             # Проверяем масть только у игрока
             player_suits = [c['suit'] for c in game_data.get('player_cards', [])]
             win = pred['suit'] in player_suits
+            
+            # Если это был прогноз по паттерну перебора, обновляем статистику
+            if pred.get('source') == 'паттерн перебора':
+                self.bust_pattern_stats['total'] += 1
+                if win:
+                    self.bust_pattern_stats['hits'] += 1
+                logger.info(f"📊 Статистика паттерна: {self.bust_pattern_stats['hits']}/{self.bust_pattern_stats['total']}")
             
             if win:
                 pred['status'] = 'win'
@@ -423,7 +403,7 @@ def format_prediction(pred):
     text += f"📊 *Анализ игры* #{pred['source']}\n"
     text += f"🎯 *Цель:* игра #{pred['targets'][0]}\n\n"
     text += f"🃏 *Масть:* {pred['suit']} (только у игрока)\n"
-    text += f"📈 Уверенность: {pred['confidence']:.1f}%\n\n"
+    text += f"📈 Уверенность: {pred['confidence']}% (источник: {pred['source']})\n\n"
     text += f"🔄 *Догоны:*\n  • #{pred['targets'][1]}\n  • #{pred['targets'][2]}\n\n"
     text += f"⏱ {datetime.now(pytz.timezone('Europe/Moscow')).strftime('%H:%M')} МСК"
     return text
@@ -519,7 +499,7 @@ async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         logger.error(f"Ошибка редактирования догона: {e}")
         
         # Создаем новый прогноз
-        prediction = context.bot_data['predictor'].analyze_all_factors(game_data)
+        prediction = context.bot_data['predictor'].analyze_and_predict(game_data)
         
         if prediction:
             text = format_prediction(prediction)
@@ -535,16 +515,12 @@ async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     print("\n" + "="*60)
-    print("🤖 АНАЛИТИЧЕСКИЙ БОТ (ПОЛНАЯ ВЕРСИЯ)")
+    print("🤖 АНАЛИТИЧЕСКИЙ БОТ (ПЕРЕБОРНЫЙ ПАТТЕРН)")
     print("="*60)
     print(f"📥 Вход: {INPUT_CHANNEL_ID}")
     print(f"📤 Выход: {OUTPUT_CHANNEL_ID}")
     print(f"💾 База: {DB_FILE}")
-    print("🎯 Учитываются факторы:")
-    print("  • Таблица 1-720")
-    print("  • Карты дилера (парный сдвиг)")
-    print("  • Использованные масти")
-    print("  • Перебор / 21 / Ничья")
+    print("🎯 Приоритет: перебор игрока (противоположная масть в следующей игре)")
     print("🔄 Догоны: +2 игры")
     print("✅ Проверка: только у игрока")
     print("="*60 + "\n")
