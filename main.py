@@ -106,50 +106,53 @@ class Database:
             logger.error(f"Ошибка сохранения игры: {e}")
             return False
     
-    def find_similar_situations(self, game_data, search_type='suit', limit=100):
-        """Ищет похожие ситуации в истории"""
+    def analyze_situation(self, game_data, limit=100):
+        """Анализирует ситуацию и возвращает статистику по мастям"""
         if len(game_data['player_cards']) < 2:
-            return []
+            return None
         
-        if search_type == 'suit':
-            # Ищем по мастям первых двух карт
-            card1_suit = game_data['player_cards'][0]['suit']
-            card2_suit = game_data['player_cards'][1]['suit']
-            
-            cursor = self.conn.execute('''
-                SELECT game_num FROM games 
-                WHERE player_card1_suit = ? AND player_card2_suit = ?
-                  AND game_num < ?
-                ORDER BY game_num DESC LIMIT ?
-            ''', (card1_suit, card2_suit, game_data['game_num'], limit))
-            
-        else:  # search_type == 'value'
-            # Ищем по значениям первых двух карт
-            card1_val = game_data['player_cards'][0]['value']
-            card2_val = game_data['player_cards'][1]['value']
-            
-            cursor = self.conn.execute('''
-                SELECT game_num FROM games 
-                WHERE player_card1_value = ? AND player_card2_value = ?
-                  AND game_num < ?
-                ORDER BY game_num DESC LIMIT ?
-            ''', (card1_val, card2_val, game_data['game_num'], limit))
+        # Ищем похожие ситуации по первым двум картам
+        card1_suit = game_data['player_cards'][0]['suit']
+        card2_suit = game_data['player_cards'][1]['suit']
+        
+        cursor = self.conn.execute('''
+            SELECT game_num FROM games 
+            WHERE player_card1_suit = ? AND player_card2_suit = ?
+              AND game_num < ?
+            ORDER BY game_num DESC LIMIT ?
+        ''', (card1_suit, card2_suit, game_data['game_num'], limit))
         
         similar_games = [row[0] for row in cursor.fetchall()]
         
-        # Для каждой похожей игры смотрим, что было в следующей
+        if not similar_games:
+            return None
+        
+        # Смотрим, что было в следующих играх
         outcomes = []
         for g_num in similar_games:
             next_game = self.get_game(g_num + 1)
-            if next_game:
-                if search_type == 'suit':
-                    # Для масти берем масть победителя
-                    outcomes.append(next_game['winner_suit'])
-                else:
-                    # Для значения собираем все значения следующей игры
-                    outcomes.extend(next_game['all_values'])
+            if next_game and next_game['winner_suit']:
+                outcomes.append(next_game['winner_suit'])
         
-        return outcomes
+        if not outcomes:
+            return None
+        
+        # Считаем статистику
+        counter = Counter(outcomes)
+        total = len(outcomes)
+        
+        stats = {}
+        for suit, count in counter.items():
+            stats[suit] = {
+                'count': count,
+                'percentage': round(count / total * 100, 1)
+            }
+        
+        return {
+            'total': total,
+            'stats': stats,
+            'most_common': counter.most_common(1)[0][0]
+        }
     
     def get_game(self, game_num):
         cursor = self.conn.execute('''
@@ -157,16 +160,9 @@ class Database:
         ''', (game_num,))
         row = cursor.fetchone()
         if row:
-            # Собираем все значения для value-поиска
-            all_values = []
-            for i in [2,4,6,9,11,13]:  # индексы значений карт
-                if row[i]:
-                    all_values.append(row[i])
-            
             return {
                 'game_num': row[1],
-                'winner_suit': self._get_winner_suit(row),
-                'all_values': all_values
+                'winner_suit': self._get_winner_suit(row)
             }
         return None
     
@@ -183,13 +179,23 @@ def normalize_suit(s):
     if not s:
         return None
     s = str(s).strip()
-    if s in ('♥', '❤', '♡', '♥️'):
+    s = re.sub(r'[\uFE0F\u20E3]', '', s)
+    
+    if s in ('♥', '❤', '♡'):
         return '♥️'
-    if s in ('♠', '♤', '♠️'):
+    if s in ('♠', '♤'):
         return '♠️'
-    if s in ('♣', '♧', '♣️'):
+    if s in ('♣', '♧'):
         return '♣️'
-    if s in ('♦', '♢', '♦️'):
+    if s in ('♦', '♢'):
+        return '♦️'
+    if '♥' in s:
+        return '♥️'
+    if '♠' in s:
+        return '♠️'
+    if '♣' in s:
+        return '♣️'
+    if '♦' in s:
         return '♦️'
     return None
 
@@ -210,10 +216,6 @@ def parse_game_data(text):
     elif '#НИЧЬЯ' in text:
         winner = 'tie'
     
-    # Счет
-    score_match = re.search(r'#T(\d+)', text)
-    total_score = int(score_match.group(1)) if score_match else 0
-    
     player_cards = []
     dealer_cards = []
     
@@ -225,24 +227,68 @@ def parse_game_data(text):
     else:
         return None
     
-    # Паттерн для карт
-    card_pattern = r'(\d+|J|Q|K|A)\s*([♥️♦️♠️♣️])'
+    # Убираем лишнее
+    left_part = re.sub(r'#N\d+\s*', '', left_part)
+    left_part = left_part.replace('(', '').replace(')', '').replace('☑️', '').replace('✅', '')
+    right_part = right_part.replace('(', '').replace(')', '').replace('☑️', '').replace('✅', '')
     
-    # Карты игрока
-    for match in re.finditer(card_pattern, left_part):
-        value, suit = match.groups()
-        suit = normalize_suit(suit)
-        if suit:
-            player_cards.append({'value': value, 'suit': suit})
+    # Парсим карты игрока
+    i = 0
+    while i < len(left_part):
+        if left_part[i].isspace():
+            i += 1
+            continue
+        
+        value = None
+        if i < len(left_part) and left_part[i].isdigit():
+            if i+1 < len(left_part) and left_part[i+1].isdigit():
+                value = left_part[i:i+2]
+                i += 2
+            else:
+                value = left_part[i]
+                i += 1
+        elif i < len(left_part) and left_part[i] in 'JQKA':
+            value = left_part[i]
+            i += 1
+        else:
+            i += 1
+            continue
+        
+        if i < len(left_part):
+            suit = normalize_suit(left_part[i])
+            if suit:
+                player_cards.append({'value': value, 'suit': suit})
+            i += 1
     
-    # Карты дилера
-    for match in re.finditer(card_pattern, right_part):
-        value, suit = match.groups()
-        suit = normalize_suit(suit)
-        if suit:
-            dealer_cards.append({'value': value, 'suit': suit})
+    # Парсим карты дилера
+    i = 0
+    while i < len(right_part):
+        if right_part[i].isspace():
+            i += 1
+            continue
+        
+        value = None
+        if i < len(right_part) and right_part[i].isdigit():
+            if i+1 < len(right_part) and right_part[i+1].isdigit():
+                value = right_part[i:i+2]
+                i += 2
+            else:
+                value = right_part[i]
+                i += 1
+        elif i < len(right_part) and right_part[i] in 'JQKA':
+            value = right_part[i]
+            i += 1
+        else:
+            i += 1
+            continue
+        
+        if i < len(right_part):
+            suit = normalize_suit(right_part[i])
+            if suit:
+                dealer_cards.append({'value': value, 'suit': suit})
+            i += 1
     
-    # Счет игрока и дилера
+    # Счет
     player_score = 0
     dealer_score = 0
     score_parts = re.findall(r'(\d+)\(', text)
@@ -257,7 +303,6 @@ def parse_game_data(text):
         'player_score': player_score,
         'dealer_score': dealer_score,
         'winner': winner,
-        'total_score': total_score,
         'timestamp': datetime.now(pytz.timezone('Europe/Moscow'))
     }
 
@@ -265,187 +310,102 @@ def parse_game_data(text):
 class PredictionBot:
     def __init__(self, db):
         self.db = db
-        self.active_predictions = {}  # target_game -> prediction
-        self.prediction_counter = 0
+        self.predictions = {}
+        self.next_id = 1
         self.stats = {'total': 0, 'wins': 0, 'losses': 0}
     
     def analyze_and_predict(self, game_data):
-        """Анализирует ситуацию и создает прогноз на масть и значение"""
+        """Анализирует ситуацию и создает прогноз"""
         target_game = game_data['game_num'] + 1
         
-        # Проверяем, нет ли уже прогноза на эту цель
-        if target_game in self.active_predictions:
-            logger.info(f"Прогноз на игру #{target_game} уже существует, пропускаем")
+        # Проверяем, нет ли уже прогноза
+        if target_game in self.predictions:
+            logger.info(f"Прогноз на игру #{target_game} уже есть")
             return None
         
-        # ===== ПРОГНОЗ НА МАСТЬ (гибрид: таблица + статистика) =====
-        # Что говорит таблица (95% точности)
+        # Смотрим, что говорит таблица
         table_suit = get_suit_from_table(target_game)
-        table_accuracy = 95
         
-        # Что говорит статистика
-        suit_outcomes = self.db.find_similar_situations(game_data, 'suit', limit=100)
-        stat_prediction = self._analyze_outcomes(suit_outcomes, 'suit')
+        # Анализируем похожие ситуации
+        stats = self.db.analyze_situation(game_data)
         
-        # Выбираем лучший прогноз для масти
-        suit_prediction = None
-        if stat_prediction:
-            if stat_prediction['value'] == table_suit:
-                # Совпадает — супер-уверенный прогноз
-                suit_prediction = {
-                    'type': 'suit',
-                    'value': table_suit,
-                    'confidence': 98,
-                    'samples': stat_prediction['samples'],
-                    'source': 'гибрид (таблица + статистика)'
-                }
-            elif table_accuracy > stat_prediction['confidence']:
-                # Таблица точнее
-                suit_prediction = {
-                    'type': 'suit',
-                    'value': table_suit,
-                    'confidence': table_accuracy,
-                    'samples': 720,
-                    'source': 'таблица'
-                }
+        if stats and table_suit in stats['stats']:
+            # Если масть из таблицы была в истории
+            percent = stats['stats'][table_suit]['percentage']
+            logger.info(f"Масть {table_suit} по таблице, в истории {percent}%")
+            
+            # Если масть из таблицы подтверждается историей (>40%)
+            if percent >= 40:
+                suit = table_suit
+                confidence = percent
             else:
-                # Статистика точнее
-                suit_prediction = stat_prediction
-                suit_prediction['source'] = 'статистика'
+                # Если таблица расходится с историей, берем самую частую из истории
+                suit = stats['most_common']
+                confidence = stats['stats'][suit]['percentage']
+                logger.info(f"Берем масть из истории: {suit} ({confidence}%)")
         else:
             # Если нет статистики, используем таблицу
-            suit_prediction = {
-                'type': 'suit',
-                'value': table_suit,
-                'confidence': table_accuracy,
-                'samples': 720,
-                'source': 'таблица'
-            }
+            suit = table_suit
+            confidence = 95
+            logger.info(f"Нет статистики, используем таблицу: {suit}")
         
-        # ===== ПРОГНОЗ НА ЗНАЧЕНИЕ (только статистика) =====
-        value_outcomes = self.db.find_similar_situations(game_data, 'value', limit=100)
-        value_prediction = self._analyze_outcomes(value_outcomes, 'value')
-        if value_prediction:
-            value_prediction['source'] = 'статистика'
-        
-        # Если нет ни одного прогноза — выходим
-        if not suit_prediction and not value_prediction:
-            return None
-        
-        self.prediction_counter += 1
-        pred_id = self.prediction_counter
-        
+        # Создаем прогноз
         prediction = {
-            'id': pred_id,
+            'id': self.next_id,
             'source': game_data['game_num'],
             'targets': [target_game, target_game+1, target_game+2],
-            'suit_prediction': suit_prediction,
-            'value_prediction': value_prediction,
+            'suit': suit,
+            'confidence': confidence,
             'attempt': 0,
             'status': 'pending',
             'msg_id': None
         }
         
-        self.active_predictions[target_game] = prediction
-        logger.info(f"📊 Прогноз #{pred_id}: игра #{target_game}")
+        self.predictions[target_game] = prediction
+        self.next_id += 1
+        logger.info(f"📊 Прогноз #{prediction['id']}: игра #{target_game} -> {suit}")
         return prediction
-    
-    def _analyze_outcomes(self, outcomes, pred_type):
-        """Анализирует outcomes и возвращает предсказание"""
-        if not outcomes:
-            return None
-        
-        counter = Counter(outcomes)
-        best, count = counter.most_common(1)[0]
-        confidence = (count / len(outcomes)) * 100
-        
-        if confidence < 40:
-            return None
-        
-        return {
-            'type': pred_type,
-            'value': best,
-            'confidence': confidence,
-            'samples': len(outcomes)
-        }
     
     def check_game(self, game_num, game_data):
         """Проверяет игру по активным прогнозам"""
-        results = []
-        
-        for target, pred in list(self.active_predictions.items()):
+        for target, pred in list(self.predictions.items()):
             if target != game_num:
                 continue
             
-            # Проверяем оба прогноза
-            suit_win = False
-            value_win = False
-            
-            # Проверка масти (только у игрока)
-            if pred.get('suit_prediction'):
-                player_suits = [c['suit'] for c in game_data.get('player_cards', [])]
-                suit_win = pred['suit_prediction']['value'] in player_suits
-                logger.info(f"🔍 Масть: ищем {pred['suit_prediction']['value']} у игрока {player_suits} -> {suit_win}")
-            
-            # Проверка значения (у обоих)
-            if pred.get('value_prediction'):
-                all_values = []
-                for c in game_data.get('player_cards', []):
-                    all_values.append(c['value'])
-                for c in game_data.get('dealer_cards', []):
-                    all_values.append(c['value'])
-                value_win = pred['value_prediction']['value'] in all_values
-                logger.info(f"🔍 Значение: ищем {pred['value_prediction']['value']} в {all_values} -> {value_win}")
-            
-            # Прогноз считается выигрышным, если хотя бы одно предсказание верно
-            win = suit_win or value_win
+            # Проверяем масть только у игрока
+            player_suits = [c['suit'] for c in game_data.get('player_cards', [])]
+            win = pred['suit'] in player_suits
             
             if win:
                 pred['status'] = 'win'
                 self.stats['wins'] += 1
                 self.stats['total'] += 1
-                results.append(('win', pred))
-                logger.info(f"✅ Прогноз #{pred['id']} зашёл в игре #{game_num}")
-                del self.active_predictions[target]
+                del self.predictions[target]
+                return ('win', pred)
             
             elif pred['attempt'] < 2:
                 pred['attempt'] += 1
                 next_target = pred['targets'][pred['attempt']]
-                self.active_predictions[next_target] = pred
-                del self.active_predictions[target]
-                results.append(('dogon', pred))
-                logger.info(f"🔄 Прогноз #{pred['id']} догон {pred['attempt']} на игру #{next_target}")
+                self.predictions[next_target] = pred
+                del self.predictions[target]
+                return ('dogon', pred)
             
             else:
                 pred['status'] = 'loss'
                 self.stats['losses'] += 1
                 self.stats['total'] += 1
-                results.append(('loss', pred))
-                logger.info(f"❌ Прогноз #{pred['id']} не зашёл")
-                del self.active_predictions[target]
+                del self.predictions[target]
+                return ('loss', pred)
         
-        return results
+        return None
 
 # ===== ФОРМАТИРОВАНИЕ =====
 def format_prediction(pred):
     text = f"🎯 *ПРОГНОЗ #{pred['id']}*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
     text += f"📊 *Анализ игры* #{pred['source']}\n"
     text += f"🎯 *Цель:* игра #{pred['targets'][0]}\n\n"
-    
-    if pred.get('suit_prediction'):
-        sp = pred['suit_prediction']
-        suit_value = sp.get('value') if sp else None
-        if suit_value:
-            text += f"🃏 *Масть:* {suit_value} (только у игрока)\n"
-            text += f"📈 Уверенность: {sp.get('confidence', 0):.1f}% (источник: {sp.get('source', '?')})\n\n"
-    
-    if pred.get('value_prediction'):
-        vp = pred['value_prediction']
-        value_value = vp.get('value') if vp else None
-        if value_value:
-            text += f"🎴 *Значение:* {value_value} (везде на столе)\n"
-            text += f"📈 Уверенность: {vp.get('confidence', 0):.1f}% (источник: {vp.get('source', '?')})\n\n"
-    
+    text += f"🃏 *Масть:* {pred['suit']} (только у игрока)\n"
+    text += f"📈 Уверенность: {pred['confidence']:.1f}%\n\n"
     text += f"🔄 *Догоны:*\n  • #{pred['targets'][1]}\n  • #{pred['targets'][2]}\n\n"
     text += f"⏱ {datetime.now(pytz.timezone('Europe/Moscow')).strftime('%H:%M')} МСК"
     return text
@@ -454,43 +414,18 @@ def format_dogon(pred):
     text = f"🔄 *ДОГОН #{pred['id']}*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
     text += f"Попытка {pred['attempt'] + 1}/3\n"
     text += f"🎯 *Цель:* игра #{pred['targets'][pred['attempt']]}\n\n"
-    
-    if pred.get('suit_prediction'):
-        suit_value = pred['suit_prediction'].get('value')
-        if suit_value:
-            text += f"🃏 *Масть:* {suit_value}\n"
-    
-    if pred.get('value_prediction'):
-        value_value = pred['value_prediction'].get('value')
-        if value_value:
-            text += f"🎴 *Значение:* {value_value}\n"
-    
-    text += f"\n⏱ {datetime.now(pytz.timezone('Europe/Moscow')).strftime('%H:%M')} МСК"
+    text += f"🃏 *Масть:* {pred['suit']}\n\n"
+    text += f"⏱ {datetime.now(pytz.timezone('Europe/Moscow')).strftime('%H:%M')} МСК"
     return text
 
 def format_result(pred, result_type):
     if result_type == 'win':
         text = f"✅ *ПРОГНОЗ #{pred['id']} ЗАШЁЛ!*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        if pred.get('suit_prediction'):
-            suit_value = pred['suit_prediction'].get('value')
-            if suit_value:
-                text += f"🃏 Масть {suit_value} у игрока\n"
-        if pred.get('value_prediction'):
-            value_value = pred['value_prediction'].get('value')
-            if value_value:
-                text += f"🎴 Значение {value_value} на столе\n"
+        text += f"🃏 Масть {pred['suit']} у игрока\n"
         text += f"📊 Попытка: {pred['attempt'] + 1}/3\n\n"
     else:
         text = f"❌ *ПРОГНОЗ #{pred['id']} НЕ ЗАШЁЛ*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        if pred.get('suit_prediction'):
-            suit_value = pred['suit_prediction'].get('value')
-            if suit_value:
-                text += f"🃏 Масть {suit_value} не появилась у игрока\n"
-        if pred.get('value_prediction'):
-            value_value = pred['value_prediction'].get('value')
-            if value_value:
-                text += f"🎴 Значение {value_value} не появилось на столе\n"
-        text += f"за 3 игры\n\n"
+        text += f"🃏 Масть {pred['suit']} не появилась у игрока за 3 игры\n\n"
     
     text += f"⏱ {datetime.now(pytz.timezone('Europe/Moscow')).strftime('%H:%M')} МСК"
     return text
@@ -522,10 +457,10 @@ async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.bot_data['db'].add_game(game_data)
         
         # Проверяем активные прогнозы
-        results = context.bot_data['predictor'].check_game(game_data['game_num'], game_data)
+        result = context.bot_data['predictor'].check_game(game_data['game_num'], game_data)
         
-        for result in results:
-            result_type, pred = result[0], result[1]
+        if result:
+            result_type, pred = result
             
             if result_type in ['win', 'loss']:
                 text = format_result(pred, result_type)
@@ -537,7 +472,6 @@ async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             text=text,
                             parse_mode='Markdown'
                         )
-                        logger.info(f"✏️ Результат отредактирован в сообщении {pred['msg_id']}")
                     except Exception as e:
                         logger.error(f"Ошибка редактирования: {e}")
                         msg = await context.bot.send_message(
@@ -563,39 +497,34 @@ async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             text=format_dogon(pred),
                             parse_mode='Markdown'
                         )
-                        logger.info(f"✏️ Догон отредактирован в сообщении {pred['msg_id']}")
                     except Exception as e:
                         logger.error(f"Ошибка редактирования догона: {e}")
         
-        # Создаем новый прогноз только если его ещё нет
-        target_game = game_data['game_num'] + 1
-        if target_game not in context.bot_data['predictor'].active_predictions:
-            prediction = context.bot_data['predictor'].analyze_and_predict(game_data)
-            if prediction:
-                text = format_prediction(prediction)
-                msg = await context.bot.send_message(
-                    chat_id=OUTPUT_CHANNEL_ID,
-                    text=text,
-                    parse_mode='Markdown'
-                )
-                prediction['msg_id'] = msg.message_id
-                logger.info(f"🎯 Создан прогноз #{prediction['id']} на игру #{target_game}")
-        else:
-            logger.info(f"Прогноз на игру #{target_game} уже существует, пропускаем")
+        # Создаем новый прогноз
+        prediction = context.bot_data['predictor'].analyze_and_predict(game_data)
+        
+        if prediction:
+            text = format_prediction(prediction)
+            msg = await context.bot.send_message(
+                chat_id=OUTPUT_CHANNEL_ID,
+                text=text,
+                parse_mode='Markdown'
+            )
+            prediction['msg_id'] = msg.message_id
         
     except Exception as e:
         logger.error(f"❌ Ошибка: {e}", exc_info=True)
 
 def main():
     print("\n" + "="*60)
-    print("🤖 АНАЛИТИЧЕСКИЙ БОТ (ГИБРИДНЫЕ ПРОГНОЗЫ)")
+    print("🤖 АНАЛИТИЧЕСКИЙ БОТ")
     print("="*60)
     print(f"📥 Вход: {INPUT_CHANNEL_ID}")
     print(f"📤 Выход: {OUTPUT_CHANNEL_ID}")
     print(f"💾 База: {DB_FILE}")
-    print("🃏 Масти: таблица 1-720 + статистика")
-    print("🎴 Значения: только статистика")
+    print("🎯 Прогноз: таблица + анализ истории")
     print("🔄 Догоны: +2 игры")
+    print("✅ Проверка: только у игрока")
     print("="*60 + "\n")
     
     # Инициализация
@@ -604,7 +533,6 @@ def main():
     
     app = Application.builder().token(TOKEN).build()
     
-    # Сохраняем в context
     app.bot_data['db'] = db
     app.bot_data['predictor'] = predictor
     
