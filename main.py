@@ -51,7 +51,8 @@ class Database:
                 dealer_score INTEGER,
                 winner TEXT,
                 first_dealer_card_suit TEXT,
-                dealer_picture TEXT,
+                has_picture TEXT,
+                picture_count INTEGER,
                 game_time TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -64,8 +65,8 @@ class Database:
                 INSERT OR IGNORE INTO games (
                     game_num, player_cards, dealer_cards,
                     player_score, dealer_score, winner,
-                    first_dealer_card_suit, dealer_picture, game_time
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    first_dealer_card_suit, has_picture, picture_count, game_time
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 game_data['game_num'],
                 str(game_data['player_cards']),
@@ -74,7 +75,8 @@ class Database:
                 game_data['dealer_score'],
                 game_data['winner'],
                 game_data['first_dealer_suit'],
-                game_data['dealer_picture'],
+                game_data['has_picture'],
+                game_data['picture_count'],
                 game_data['timestamp']
             ))
             self.conn.commit()
@@ -110,6 +112,10 @@ def normalize_suit(s):
 
 def parse_game_data(text):
     """Парсит игру из текста сообщения"""
+    # Проверяем наличие галочки (только завершённые игры)
+    if '✅' not in text:
+        return None
+    
     match = re.search(r'#N(\d+)', text)
     if not match:
         return None
@@ -118,9 +124,9 @@ def parse_game_data(text):
     
     # Определяем победителя
     winner = None
-    if '#П1' in text:
+    if '#П1' in text or '✅' in text.split('-')[0]:  # галочка слева
         winner = 'player'
-    elif '#П2' in text:
+    elif '#П2' in text or '✅' in text.split('-')[1]:  # галочка справа
         winner = 'dealer'
     elif '#НИЧЬЯ' in text:
         winner = 'tie'
@@ -138,8 +144,8 @@ def parse_game_data(text):
     
     # Убираем лишнее
     left_part = re.sub(r'#N\d+\s*', '', left_part)
-    left_part = left_part.replace('(', '').replace(')', '').replace('☑️', '').replace('✅', '')
-    right_part = right_part.replace('(', '').replace(')', '').replace('☑️', '').replace('✅', '')
+    left_part = left_part.replace('(', '').replace(')', '').replace('✅', '').replace('🟩', '')
+    right_part = right_part.replace('(', '').replace(')', '').replace('✅', '').replace('🟩', '')
     
     # Парсим карты игрока
     i = 0
@@ -171,7 +177,8 @@ def parse_game_data(text):
     
     # Парсим карты дилера
     dealer_first_suit = None
-    dealer_picture = None
+    picture_count = 0
+    has_picture = False
     first_card = True
     
     i = 0
@@ -206,18 +213,24 @@ def parse_game_data(text):
                     dealer_first_suit = suit
                     first_card = False
                 
-                # Запоминаем картинку (только одну, первую попавшуюся)
-                if value in ['J', 'Q', 'K', 'A'] and not dealer_picture:
-                    dealer_picture = value
+                # Считаем картинки
+                if value in ['J', 'Q', 'K', 'A']:
+                    picture_count += 1
+                    has_picture = True
             i += 1
     
     # Счет
     player_score = 0
     dealer_score = 0
-    score_parts = re.findall(r'(\d+)\(', text)
-    if len(score_parts) >= 2:
-        player_score = int(score_parts[0])
-        dealer_score = int(score_parts[1])
+    
+    # Ищем числа перед скобками
+    left_score_match = re.search(r'(\d+)\(', left_part)
+    if left_score_match:
+        player_score = int(left_score_match.group(1))
+    
+    right_score_match = re.search(r'(\d+)\(', right_part)
+    if right_score_match:
+        dealer_score = int(right_score_match.group(1))
     
     return {
         'game_num': game_num,
@@ -227,7 +240,8 @@ def parse_game_data(text):
         'dealer_score': dealer_score,
         'winner': winner,
         'first_dealer_suit': dealer_first_suit,
-        'dealer_picture': dealer_picture,
+        'has_picture': has_picture,
+        'picture_count': picture_count,
         'timestamp': datetime.now(pytz.timezone('Europe/Moscow'))
     }
 
@@ -241,12 +255,18 @@ class PredictionBot:
     
     def analyze_and_predict(self, game_data):
         """Анализирует игру по твоему алгоритму"""
-        if not game_data['first_dealer_suit'] or not game_data['dealer_picture']:
-            logger.info("Нет данных для прогноза")
+        
+        # Проверяем, что у дилера ровно одна картинка
+        if game_data['picture_count'] != 1:
+            logger.info(f"У дилера {game_data['picture_count']} картинок, нужно ровно 1. Прогноз не создаётся")
             return None
         
-        # Целевая игра = текущая + очки игрока
-        target_game = game_data['game_num'] + game_data['player_score']
+        if not game_data['first_dealer_suit']:
+            logger.info("Нет масти первой карты дилера")
+            return None
+        
+        # Целевая игра = текущая + очки дилера
+        target_game = game_data['game_num'] + game_data['dealer_score']
         
         # Проверяем, нет ли уже прогноза на эту цель
         if target_game in self.predictions:
@@ -258,7 +278,6 @@ class PredictionBot:
             'source': game_data['game_num'],
             'targets': [target_game, target_game+1, target_game+2],
             'player_suit': game_data['first_dealer_suit'],  # масть для игрока
-            'picture': game_data['dealer_picture'],          # картинка для стола
             'attempt': 0,
             'status': 'pending',
             'msg_id': None
@@ -266,7 +285,7 @@ class PredictionBot:
         
         self.predictions[target_game] = prediction
         self.next_id += 1
-        logger.info(f"📊 Прогноз #{prediction['id']}: игра #{target_game}")
+        logger.info(f"📊 Прогноз #{prediction['id']}: игра #{target_game} -> масть {game_data['first_dealer_suit']}")
         return prediction
     
     def check_game(self, game_num, game_data):
@@ -277,22 +296,9 @@ class PredictionBot:
             
             # Проверяем масть у игрока
             player_suits = [c['suit'] for c in game_data.get('player_cards', [])]
-            suit_win = pred['player_suit'] in player_suits
+            win = pred['player_suit'] in player_suits
             
-            # Проверяем картинку на столе
-            all_values = []
-            for c in game_data.get('player_cards', []):
-                all_values.append(c['value'])
-            for c in game_data.get('dealer_cards', []):
-                all_values.append(c['value'])
-            picture_win = pred['picture'] in all_values
-            
-            # Прогноз выигрышный, если выполнены ОБА условия
-            win = suit_win and picture_win
-            
-            logger.info(f"🔍 Проверка #{game_num}: "
-                       f"масть {pred['player_suit']} у игрока = {suit_win}, "
-                       f"картинка {pred['picture']} на столе = {picture_win}")
+            logger.info(f"🔍 Проверка #{game_num}: ищем масть {pred['player_suit']} у игрока {player_suits} -> {win}")
             
             if win:
                 pred['status'] = 'win'
@@ -322,9 +328,7 @@ def format_prediction(pred):
     text = f"🎯 *ПРОГНОЗ #{pred['id']}*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
     text += f"📊 *Анализ игры* #{pred['source']}\n"
     text += f"🎯 *Цель:* игра #{pred['targets'][0]}\n\n"
-    text += f"👤 *У игрока:* масть {pred['player_suit']}\n"
-    text += f"🃏 *На столе:* картинка {pred['picture']}\n\n"
-    text += f"✅ *Оба условия должны выполниться*\n\n"
+    text += f"👤 *У игрока:* масть {pred['player_suit']}\n\n"
     text += f"🔄 *Догоны:*\n"
     text += f"  • #{pred['targets'][1]}\n"
     text += f"  • #{pred['targets'][2]}\n\n"
@@ -335,8 +339,7 @@ def format_dogon(pred):
     text = f"🔄 *ДОГОН #{pred['id']}*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
     text += f"Попытка {pred['attempt'] + 1}/3\n"
     text += f"🎯 *Цель:* игра #{pred['targets'][pred['attempt']]}\n\n"
-    text += f"👤 *У игрока:* масть {pred['player_suit']}\n"
-    text += f"🃏 *На столе:* картинка {pred['picture']}\n\n"
+    text += f"👤 *У игрока:* масть {pred['player_suit']}\n\n"
     text += f"⏱ {datetime.now(pytz.timezone('Europe/Moscow')).strftime('%H:%M')} МСК"
     return text
 
@@ -344,11 +347,10 @@ def format_result(pred, result_type):
     if result_type == 'win':
         text = f"✅ *ПРОГНОЗ #{pred['id']} ЗАШЁЛ!*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
         text += f"👤 Масть {pred['player_suit']} у игрока\n"
-        text += f"🃏 Картинка {pred['picture']} на столе\n"
         text += f"📊 Попытка: {pred['attempt'] + 1}/3\n\n"
     else:
         text = f"❌ *ПРОГНОЗ #{pred['id']} НЕ ЗАШЁЛ*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        text += f"Условия не выполнены за 3 игры\n\n"
+        text += f"Масть {pred['player_suit']} не появилась у игрока за 3 игры\n\n"
     
     text += f"⏱ {datetime.now(pytz.timezone('Europe/Moscow')).strftime('%H:%M')} МСК"
     return text
@@ -367,6 +369,10 @@ async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not text:
             return
         
+        # Проверяем наличие галочки (только завершённые игры)
+        if '✅' not in text:
+            return
+        
         logger.info(f"📥 Получено: {text[:100]}...")
         
         game_data = parse_game_data(text)
@@ -375,9 +381,9 @@ async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         logger.info(f"📊 Игра #{game_data['game_num']}: "
-                   f"очки игрока {game_data['player_score']}, "
+                   f"очки дилера {game_data['dealer_score']}, "
                    f"первая масть дилера {game_data['first_dealer_suit']}, "
-                   f"картинка дилера {game_data['dealer_picture']}")
+                   f"картинок у дилера: {game_data['picture_count']}")
         
         # Сохраняем в базу
         context.bot_data['db'].add_game(game_data)
@@ -449,9 +455,10 @@ def main():
     print(f"📤 Выход: {OUTPUT_CHANNEL_ID}")
     print(f"💾 База: {DB_FILE}")
     print("🎯 Правила:")
-    print("  • Цель = текущая игра + очки игрока")
+    print("  • Только игры с ✅")
+    print("  • У дилера ровно 1 картинка (J,Q,K,A)")
+    print("  • Цель = номер игры + очки дилера")
     print("  • Масть для игрока = первая карта дилера")
-    print("  • Картинка для стола = картинка дилера")
     print("🔄 Догоны: +2 игры")
     print("="*60 + "\n")
     
