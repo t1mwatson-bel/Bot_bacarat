@@ -56,6 +56,67 @@ HEADERS = {
 }
 
 # =====================================================================
+# ЧЕРНЫЙ СПИСОК ЛИГ (КИБЕРСПОРТ И ШУМ)
+# =====================================================================
+BLACKLIST_LEAGUES = [
+    "Student League",
+    "Short Football",
+    "ShortFootball",
+    "FIFA",
+    "PES",
+    "Кибер",
+    "Esports",
+    "Cyber",
+    "eSports",
+    "Mortal Kombat",
+    "Tekken",
+    "Counter Strike",
+    "Dota",
+    "World of tanks",
+    "Rocket League",
+    "StreetFighter",
+    "Call of Duty",
+    "Dead Or Alive",
+    "WWE",
+    "King of Fighters",
+    "Overwatch",
+    "Looney Tunes",
+    "Hellish Quart",
+    "Need for Speed",
+    "Fatal Fury",
+    "Roller Champions",
+    "Guilty Gear",
+    "GigaBash",
+    "Angry Birds",
+    "SEGA",
+    "StarCraft",
+    "Injustice",
+    "Flatout",
+    "LaserLeague",
+    "CrossOut",
+    "Pixel Cup",
+    "Killer Instinct",
+    "Table Football",
+    "Blade and Soul",
+    "Assault Squad",
+    "Cut The Rope",
+    "Subway Surfers",
+    "Sonic",
+    "Crash",
+    "Sekiro",
+    "TABS",
+    "Rumble Stars",
+    "Robot Champions",
+    "Boxing Champs",
+    "Mega Baseball",
+    "Raid Shadow Legends",
+    "Power of Power",
+    "Mutant League",
+    "World of Warcraft",
+    "Cuphead"
+]
+
+# =====================================================================
 # ЗАПРОС ДАННЫХ
 # =====================================================================
 def fetch_data():
@@ -84,6 +145,12 @@ def parse_matches(data):
         home = item.get("O1")
         away = item.get("O2")
         league = item.get("L", "Неизвестно")
+
+        # 🔥 Проверяем черный список лиг
+        league_lower = league.lower()
+        if any(bad_league.lower() in league_lower for bad_league in BLACKLIST_LEAGUES):
+            print(f"⏭️ Пропущена лига (черный список): {league}", flush=True)
+            continue
 
         score_home = None
         score_away = None
@@ -153,11 +220,9 @@ def parse_statistics(item):
     return stats_data
 
 # =====================================================================
-# ФИЛЬТРЫ (БЕЗ 0:0!)
+# ФИЛЬТРЫ (БЕЗ 0:0)
 # =====================================================================
 def should_send_signal(old_coeff, current_coeff, score_home, score_away, stats):
-    # 🔥 УБРАЛИ ФИЛЬТР 0:0 - теперь сигналы приходят при любом счете
-    
     # Проверка на слишком большой счет (пропускаем мертвые матчи)
     if score_home is not None and score_away is not None:
         if score_home > 4 or score_away > 4:
@@ -189,8 +254,8 @@ def should_send_signal(old_coeff, current_coeff, score_home, score_away, stats):
 # ОСНОВНОЙ ЦИКЛ
 # =====================================================================
 def main():
-    print("✅ БОТ ГОТОВ К РАБОТЕ (БЕЗ ФИЛЬТРА 0:0)", flush=True)
-    send_telegram("🚀 Бот запущен на Bothost! Фильтр 0:0 ОТКЛЮЧЕН. Сигналы при любом счете (кроме 5+ голов).")
+    print("✅ БОТ ГОТОВ К РАБОТЕ (БЕЗ ФИЛЬТРА 0:0, ЧЕРНЫЙ СПИСОК КИБЕРСПОРТА)", flush=True)
+    send_telegram("🚀 Бот запущен! Киберспорт и короткий футбол ОТФИЛЬТРОВАНЫ.")
 
     last_data = {}
     last_signal_time = {}
