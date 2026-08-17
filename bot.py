@@ -153,15 +153,21 @@ def parse_statistics(item):
     return stats_data
 
 # =====================================================================
-# ФИЛЬТРЫ
+# ФИЛЬТРЫ (БЕЗ 0:0!)
 # =====================================================================
 def should_send_signal(old_coeff, current_coeff, score_home, score_away, stats):
-    if score_home != 0 or score_away != 0:
-        return False
+    # 🔥 УБРАЛИ ФИЛЬТР 0:0 - теперь сигналы приходят при любом счете
+    
+    # Проверка на слишком большой счет (пропускаем мертвые матчи)
+    if score_home is not None and score_away is not None:
+        if score_home > 4 or score_away > 4:
+            return False
 
+    # Не позднее 85-й минуты
     if stats.get("minute") and stats["minute"] > 85:
         return False
 
+    # Пороги просадки
     DROP_THRESHOLD = 0.5
     MIN_COEFF = 1.5
     MIN_DROP_PERCENT = 15
@@ -183,8 +189,8 @@ def should_send_signal(old_coeff, current_coeff, score_home, score_away, stats):
 # ОСНОВНОЙ ЦИКЛ
 # =====================================================================
 def main():
-    print("✅ БОТ ГОТОВ К РАБОТЕ", flush=True)
-    send_telegram("🚀 Бот запущен на Bothost и готов к работе!")
+    print("✅ БОТ ГОТОВ К РАБОТЕ (БЕЗ ФИЛЬТРА 0:0)", flush=True)
+    send_telegram("🚀 Бот запущен на Bothost! Фильтр 0:0 ОТКЛЮЧЕН. Сигналы при любом счете (кроме 5+ голов).")
 
     last_data = {}
     last_signal_time = {}
@@ -224,16 +230,18 @@ def main():
 
                 old = last_data[mid]
 
+                # Проверка П1 (просадка на хозяев)
                 if should_send_signal(old["p1"], match["p1"], score_h, score_a, stats):
                     signal_key = f"{mid}_p1"
                     if signal_key not in last_signal_time or (time.time() - last_signal_time[signal_key]) > 60:
+                        
                         msg = f"📉 <b>ПРОСАДКА КОЭФФИЦИЕНТА</b>\n"
                         msg += f"🏆 {match['league']}\n"
                         msg += f"⚽ {match['home']} vs {match['away']}\n"
                         msg += f"📊 <b>ПРОСАДКА НА ХОЗЯЕВ</b>\n"
                         msg += f"💰 {old['p1']:.2f} → {match['p1']:.2f} (⬇️ {old['p1'] - match['p1']:.2f})\n"
                         msg += f"📊 Просадка: {((old['p1'] - match['p1']) / old['p1'] * 100):.1f}%\n"
-                        msg += f"🎯 Счет: {score_h}:{score_a} (0:0 ✅)\n"
+                        msg += f"🎯 Текущий счет: {score_h}:{score_a}\n"
 
                         if stats.get("minute"):
                             msg += f"⏱️ Минута: {stats['minute']}'\n"
@@ -248,18 +256,20 @@ def main():
 
                         if send_telegram(msg):
                             last_signal_time[signal_key] = time.time()
-                            print(f"📤 Сигнал: {match['home']} — П1 (0:0)", flush=True)
+                            print(f"📤 Сигнал: {match['home']} — П1 (счет {score_h}:{score_a})", flush=True)
 
+                # Проверка П2 (просадка на гостей)
                 if should_send_signal(old["p2"], match["p2"], score_h, score_a, stats):
                     signal_key = f"{mid}_p2"
                     if signal_key not in last_signal_time or (time.time() - last_signal_time[signal_key]) > 60:
+                        
                         msg = f"📉 <b>ПРОСАДКА КОЭФФИЦИЕНТА</b>\n"
                         msg += f"🏆 {match['league']}\n"
                         msg += f"⚽ {match['home']} vs {match['away']}\n"
                         msg += f"📊 <b>ПРОСАДКА НА ГОСТЕЙ</b>\n"
                         msg += f"💰 {old['p2']:.2f} → {match['p2']:.2f} (⬇️ {old['p2'] - match['p2']:.2f})\n"
                         msg += f"📊 Просадка: {((old['p2'] - match['p2']) / old['p2'] * 100):.1f}%\n"
-                        msg += f"🎯 Счет: {score_h}:{score_a} (0:0 ✅)\n"
+                        msg += f"🎯 Текущий счет: {score_h}:{score_a}\n"
 
                         if stats.get("minute"):
                             msg += f"⏱️ Минута: {stats['minute']}'\n"
@@ -274,7 +284,7 @@ def main():
 
                         if send_telegram(msg):
                             last_signal_time[signal_key] = time.time()
-                            print(f"📤 Сигнал: {match['away']} — П2 (0:0)", flush=True)
+                            print(f"📤 Сигнал: {match['away']} — П2 (счет {score_h}:{score_a})", flush=True)
 
                 last_data[mid]["p1"] = match["p1"]
                 last_data[mid]["p2"] = match["p2"]
