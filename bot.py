@@ -71,7 +71,7 @@ BLACKLIST_LEAGUES = [
     "Subway Surfers", "Sonic", "Crash", "Sekiro", "TABS", "Rumble Stars",
     "Robot Champions", "Boxing Champs", "Mega Baseball", "Raid Shadow Legends",
     "Power of Power", "Mutant League", "World of Warcraft", "Cuphead",
-    "ShortFootball"
+    "ShortFootball", "Division 4x4"
 ]
 
 # =====================================================================
