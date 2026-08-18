@@ -60,8 +60,16 @@ HEADERS = {
 # ЧЕРНЫЙ СПИСОК ЛИГ (КИБЕРСПОРТ И ШУМ)
 # =====================================================================
 BLACKLIST_LEAGUES = [
-    "Student League", "Short Football", "FIFA", "PES", "Кибер", "Esports",
-    "Cyber", "eSports", "Mortal Kombat", "Tekken", "Counter Strike", "Dota",
+    "Short Football", "ShortFootball", "Short Football D1",
+    "Short Football 4x4", "Short Football 5x5", "Short Football 3x3", "Short Football 2x2",
+    "4x4", "5x5", "Division 4x4", "Division 5x5",
+    "BudnesLiga LFL 5x5", "BundesLiga LFL 5x5",
+    "BudnesLiga", "BundesLiga", "LFL",
+    "MLS+",
+    "Student League", "Student League 2",
+    "люб",  # 👈 блокирует все любительские
+    "FIFA", "PES", "Кибер", "Esports", "Cyber", "eSports",
+    "Mortal Kombat", "Tekken", "Counter Strike", "Dota",
     "World of tanks", "Rocket League", "StreetFighter", "Call of Duty",
     "Dead Or Alive", "WWE", "King of Fighters", "Overwatch", "Looney Tunes",
     "Hellish Quart", "Need for Speed", "Fatal Fury", "Roller Champions",
@@ -71,7 +79,7 @@ BLACKLIST_LEAGUES = [
     "Subway Surfers", "Sonic", "Crash", "Sekiro", "TABS", "Rumble Stars",
     "Robot Champions", "Boxing Champs", "Mega Baseball", "Raid Shadow Legends",
     "Power of Power", "Mutant League", "World of Warcraft", "Cuphead",
-    "ShortFootball", "Division 4x4", "MLS+", "BundesLiga LFL 5x5"
+    "Club Friendlies", "Товарищеские",
 ]
 
 # =====================================================================
