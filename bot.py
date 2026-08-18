@@ -122,9 +122,9 @@ def parse_matches(data):
             c = e.get("C")
             if t in [1, 2, 3]:
                 coeffs[t] = c
-            elif t == 10:  # Тотал больше 2.5
+            elif t == 10:
                 over_25 = c
-            elif t == 11:  # Тотал меньше 2.5
+            elif t == 11:
                 under_25 = c
 
         if home and away and coeffs.get(1) and coeffs.get(2):
@@ -178,7 +178,6 @@ def parse_statistics(item):
     return stats_data
 
 def should_send_signal(old_coeff, current_coeff, score_home, score_away, stats):
-    # 🔥 СЧЕТ 0:0
     if score_home != 0 or score_away != 0:
         return False
 
@@ -189,10 +188,9 @@ def should_send_signal(old_coeff, current_coeff, score_home, score_away, stats):
         print(f"⏭️ Пропущен матч (владение 0%)", flush=True)
         return False
 
-    # 🔥 МЯГКИЕ ПОРОГИ
-    DROP_THRESHOLD = 0.3      # было 0.5
+    DROP_THRESHOLD = 0.3
     MIN_COEFF = 1.5
-    MIN_DROP_PERCENT = 10     # было 15
+    MIN_DROP_PERCENT = 10
 
     if old_coeff < MIN_COEFF:
         return False
@@ -208,20 +206,18 @@ def should_send_signal(old_coeff, current_coeff, score_home, score_away, stats):
     return True
 
 def should_send_total_signal(old_over, current_over, old_under, current_under, score_home, score_away, stats):
-    # 🔥 СЧЕТ 0:0
     if score_home != 0 or score_away != 0:
-        return False
+        return False, None, None, None, None
 
     if stats.get("minute") and stats["minute"] > 85:
-        return False
+        return False, None, None, None, None
 
     if stats.get("possession_home") == 0 and stats.get("possession_away") == 0:
-        return False
+        return False, None, None, None, None
 
-    DROP_THRESHOLD = 0.2      # для тотала порог ниже
-    MIN_DROP_PERCENT = 8      # для тотала процент ниже
+    DROP_THRESHOLD = 0.2
+    MIN_DROP_PERCENT = 8
 
-    # Проверяем просадку на Over 2.5
     if old_over and current_over:
         drop_over = old_over - current_over
         if drop_over > DROP_THRESHOLD:
@@ -229,7 +225,6 @@ def should_send_total_signal(old_over, current_over, old_under, current_under, s
             if drop_percent > MIN_DROP_PERCENT:
                 return True, "OVER 2.5", old_over, current_over, drop_over
 
-    # Проверяем просадку на Under 2.5
     if old_under and current_under:
         drop_under = old_under - current_under
         if drop_under > DROP_THRESHOLD:
@@ -262,7 +257,6 @@ def main():
             for match in matches:
                 mid = match["id"]
                 
-                # Защита от дублей (1 сигнал на матч)
                 if mid in last_signal_time or mid in last_total_signal_time:
                     continue
                 
@@ -288,7 +282,7 @@ def main():
                 old = last_data[mid]
 
                 # ============================================================
-                # 1️⃣ ПРОВЕРКА ПРОСАДКИ НА ПОБЕДУ (П1/П2)
+                # 1️⃣ ПРОСАДКА НА ПОБЕДУ (П1/П2)
                 # ============================================================
                 if should_send_signal(old["p1"], match["p1"], score_h, score_a, stats):
                     home_drop = old["p1"] - match["p1"]
@@ -337,7 +331,7 @@ def main():
                         print(f"📤 Сигнал: {match['away']} — П2 (0:0)", flush=True)
 
                 # ============================================================
-                # 2️⃣ ПРОВЕРКА ПРОСАДКИ НА ТОТАЛ
+                # 2️⃣ ПРОСАДКА НА ТОТАЛ
                 # ============================================================
                 total_result = should_send_total_signal(
                     old["over_25"], match["over_25"],
