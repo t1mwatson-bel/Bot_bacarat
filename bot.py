@@ -527,12 +527,12 @@ def main():
                             })
 
                 last_data[mid]["p1"] = match["p1"]
-                last_data[mid]["p2"] = match[" выполнp2"]
+                last_data[mid]["p2"] = match["p2"]
 
-            # Провенаерка результатов каждые 5 минут
-            if", int(time.time()) % 300 flush < 30:
+            # Проверка результатов каждые 5 минут
+            if int(time.time()) % 300 < 30:
                 check_results()
-                print("📊 Проверка результатов=True)
+                print("📊 Проверка результатов выполнена", flush=True)
 
             time.sleep(30)
 
