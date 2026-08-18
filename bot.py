@@ -49,6 +49,9 @@ HEADERS = {
     "Cookie": "platform_type=desktop; auid=uaJbk2qDTUEWPz+AAzc0Ag==; lng=ru; cookies_agree_type=3; tzo=3; is12h=0; referral_values=%7B%22type%22%3A%22reflinkid%22%2C%22val%22%3A%22s_50970m_355c_%22%2C%22additional%22%3A%7B%22name_tag%22%3A%22tag%22%7D%7D; reflinkid=s_50970m_355c_; fatman_uuid=45f69ff0-ecb1-67d4-3ff2-3a45baafc739; che_g=777dc1b9-efbf-4728-947a-4a2992ef6da5; SESSION=240c24b0d757110703d84a2c059a9fc4; sh.session.id=684214c4-f09e-42da-9c1a-ea61b9aca91b; _ym_uid=1786989905737338437; _ym_d=1786989905; _ym_isad=2; _ga=GA1.1.547872848.1786989906; _ga_7JGWL9SV66=GS2.1.s1786989906$o1$g0$t1786989906$j60$l0$h408279378; _ym_visorc=b; window_width=1365"
 }
 
+# =====================================================================
+# ЧЕРНЫЙ СПИСОК (КИБЕРСПОРТ + ШУМ)
+# =====================================================================
 BLACKLIST_LEAGUES = [
     "Short Football", "ShortFootball", "Short Football D1",
     "Short Football 4x4", "Short Football 5x5", "Short Football 3x3", "Short Football 2x2",
@@ -59,9 +62,6 @@ BLACKLIST_LEAGUES = [
     "Student League", "Student League 2",
     "Subsoccer", "sub",
     "люб",
-    "Regional League",
-    "Куба", "Liga de Barrios",
-    "Индии. Калькутта", "Калькутта",
     "FIFA", "PES", "Кибер", "Esports", "Cyber", "eSports",
     "Mortal Kombat", "Tekken", "Counter Strike", "Dota",
     "World of tanks", "Rocket League", "StreetFighter", "Call of Duty",
@@ -115,11 +115,17 @@ def parse_matches(data):
                 score_away = fs.get("S2")
 
         coeffs = {}
+        over_25 = None
+        under_25 = None
         for e in item.get("E", []):
             t = e.get("T")
             c = e.get("C")
             if t in [1, 2, 3]:
                 coeffs[t] = c
+            elif t == 10:  # Тотал больше 2.5
+                over_25 = c
+            elif t == 11:  # Тотал меньше 2.5
+                under_25 = c
 
         if home and away and coeffs.get(1) and coeffs.get(2):
             matches.append({
@@ -132,6 +138,8 @@ def parse_matches(data):
                 "p1": coeffs.get(1),
                 "p2": coeffs.get(2),
                 "draw": coeffs.get(3),
+                "over_25": over_25,
+                "under_25": under_25,
                 "item": item
             })
     return matches
@@ -169,8 +177,8 @@ def parse_statistics(item):
 
     return stats_data
 
-def should_send_signal(old_coeff, current_coeff, score_home, score_away, stats, home_drop, away_drop):
-    # 🔥 СЧЕТ ДОЛЖЕН БЫТЬ ТОЛЬКО 0:0
+def should_send_signal(old_coeff, current_coeff, score_home, score_away, stats):
+    # 🔥 СЧЕТ 0:0
     if score_home != 0 or score_away != 0:
         return False
 
@@ -181,9 +189,10 @@ def should_send_signal(old_coeff, current_coeff, score_home, score_away, stats, 
         print(f"⏭️ Пропущен матч (владение 0%)", flush=True)
         return False
 
-    DROP_THRESHOLD = 0.5
+    # 🔥 МЯГКИЕ ПОРОГИ
+    DROP_THRESHOLD = 0.3      # было 0.5
     MIN_COEFF = 1.5
-    MIN_DROP_PERCENT = 15
+    MIN_DROP_PERCENT = 10     # было 15
 
     if old_coeff < MIN_COEFF:
         return False
@@ -198,12 +207,45 @@ def should_send_signal(old_coeff, current_coeff, score_home, score_away, stats, 
 
     return True
 
+def should_send_total_signal(old_over, current_over, old_under, current_under, score_home, score_away, stats):
+    # 🔥 СЧЕТ 0:0
+    if score_home != 0 or score_away != 0:
+        return False
+
+    if stats.get("minute") and stats["minute"] > 85:
+        return False
+
+    if stats.get("possession_home") == 0 and stats.get("possession_away") == 0:
+        return False
+
+    DROP_THRESHOLD = 0.2      # для тотала порог ниже
+    MIN_DROP_PERCENT = 8      # для тотала процент ниже
+
+    # Проверяем просадку на Over 2.5
+    if old_over and current_over:
+        drop_over = old_over - current_over
+        if drop_over > DROP_THRESHOLD:
+            drop_percent = (drop_over / old_over) * 100
+            if drop_percent > MIN_DROP_PERCENT:
+                return True, "OVER 2.5", old_over, current_over, drop_over
+
+    # Проверяем просадку на Under 2.5
+    if old_under and current_under:
+        drop_under = old_under - current_under
+        if drop_under > DROP_THRESHOLD:
+            drop_percent = (drop_under / old_under) * 100
+            if drop_percent > MIN_DROP_PERCENT:
+                return True, "UNDER 2.5", old_under, current_under, drop_under
+
+    return False, None, None, None, None
+
 def main():
-    print("✅ БОТ ГОТОВ К РАБОТЕ (0:0 + ЗАЩИТА ОТ ДВОЙНЫХ СИГНАЛОВ)", flush=True)
-    send_telegram("🚀 Бот запущен! Только 0:0, 1 сигнал на матч.")
+    print("✅ БОТ ГОТОВ К РАБОТЕ (0:0 + ТОТАЛ + МЯГКИЕ ПОРОГИ)", flush=True)
+    send_telegram("🚀 Бот запущен! 0:0 + Тотал + мягкие пороги.")
 
     last_data = {}
     last_signal_time = {}
+    last_total_signal_time = {}
 
     while True:
         try:
@@ -220,7 +262,8 @@ def main():
             for match in matches:
                 mid = match["id"]
                 
-                if mid in last_signal_time:
+                # Защита от дублей (1 сигнал на матч)
+                if mid in last_signal_time or mid in last_total_signal_time:
                     continue
                 
                 score_h = match.get("score_home")
@@ -234,6 +277,8 @@ def main():
                     last_data[mid] = {
                         "p1": match["p1"],
                         "p2": match["p2"],
+                        "over_25": match["over_25"],
+                        "under_25": match["under_25"],
                         "home": match["home"],
                         "away": match["away"],
                         "league": match["league"]
@@ -241,12 +286,12 @@ def main():
                     continue
 
                 old = last_data[mid]
-                
-                home_drop = old["p1"] - match["p1"]
-                away_drop = old["p2"] - match["p2"]
 
-                # Проверяем хозяев
-                if should_send_signal(old["p1"], match["p1"], score_h, score_a, stats, home_drop, away_drop):
+                # ============================================================
+                # 1️⃣ ПРОВЕРКА ПРОСАДКИ НА ПОБЕДУ (П1/П2)
+                # ============================================================
+                if should_send_signal(old["p1"], match["p1"], score_h, score_a, stats):
+                    home_drop = old["p1"] - match["p1"]
                     msg = f"📉 <b>ПРОСАДКА КОЭФФИЦИЕНТА</b>\n"
                     msg += f"🏆 {match['league']}\n"
                     msg += f"⚽ {match['home']} vs {match['away']}\n"
@@ -268,32 +313,65 @@ def main():
                         last_signal_time[mid] = time.time()
                         print(f"📤 Сигнал: {match['home']} — П1 (0:0)", flush=True)
 
-                # Проверяем гостей (только если еще не было сигнала)
-                if mid not in last_signal_time:
-                    if should_send_signal(old["p2"], match["p2"], score_h, score_a, stats, home_drop, away_drop):
-                        msg = f"📉 <b>ПРОСАДКА КОЭФФИЦИЕНТА</b>\n"
-                        msg += f"🏆 {match['league']}\n"
-                        msg += f"⚽ {match['home']} vs {match['away']}\n"
-                        msg += f"📊 <b>ПРОСАДКА НА ГОСТЕЙ</b>\n"
-                        msg += f"💰 {old['p2']:.2f} → {match['p2']:.2f} (⬇️ {away_drop:.2f})\n"
-                        msg += f"📊 Просадка: {((away_drop) / old['p2'] * 100):.1f}%\n"
-                        msg += f"🎯 Счет: 0:0 ✅\n"
-                        if stats.get("minute"):
-                            msg += f"⏱️ Минута: {stats['minute']}'\n"
-                        if stats.get("possession_home") is not None and stats.get("possession_away") is not None:
-                            msg += f"📊 Владение: {stats['possession_home']}% vs {stats['possession_away']}%\n"
-                        if stats.get("shots_home") is not None and stats.get("shots_away") is not None:
-                            msg += f"🎯 Удары в створ: {stats['shots_home']} vs {stats['shots_away']}\n"
-                        if stats.get("corners_home") is not None and stats.get("corners_away") is not None:
-                            msg += f"🚩 Угловые: {stats['corners_home']} vs {stats['corners_away']}\n"
-                        msg += f"\n🔥 <b>СТАВКА:</b> ИТБ гостей ({match['away']})"
+                if should_send_signal(old["p2"], match["p2"], score_h, score_a, stats):
+                    away_drop = old["p2"] - match["p2"]
+                    msg = f"📉 <b>ПРОСАДКА КОЭФФИЦИЕНТА</b>\n"
+                    msg += f"🏆 {match['league']}\n"
+                    msg += f"⚽ {match['home']} vs {match['away']}\n"
+                    msg += f"📊 <b>ПРОСАДКА НА ГОСТЕЙ</b>\n"
+                    msg += f"💰 {old['p2']:.2f} → {match['p2']:.2f} (⬇️ {away_drop:.2f})\n"
+                    msg += f"📊 Просадка: {((away_drop) / old['p2'] * 100):.1f}%\n"
+                    msg += f"🎯 Счет: 0:0 ✅\n"
+                    if stats.get("minute"):
+                        msg += f"⏱️ Минута: {stats['minute']}'\n"
+                    if stats.get("possession_home") is not None and stats.get("possession_away") is not None:
+                        msg += f"📊 Владение: {stats['possession_home']}% vs {stats['possession_away']}%\n"
+                    if stats.get("shots_home") is not None and stats.get("shots_away") is not None:
+                        msg += f"🎯 Удары в створ: {stats['shots_home']} vs {stats['shots_away']}\n"
+                    if stats.get("corners_home") is not None and stats.get("corners_away") is not None:
+                        msg += f"🚩 Угловые: {stats['corners_home']} vs {stats['corners_away']}\n"
+                    msg += f"\n🔥 <b>СТАВКА:</b> ИТБ гостей ({match['away']})"
 
-                        if send_telegram(msg):
-                            last_signal_time[mid] = time.time()
-                            print(f"📤 Сигнал: {match['away']} — П2 (0:0)", flush=True)
+                    if send_telegram(msg):
+                        last_signal_time[mid] = time.time()
+                        print(f"📤 Сигнал: {match['away']} — П2 (0:0)", flush=True)
+
+                # ============================================================
+                # 2️⃣ ПРОВЕРКА ПРОСАДКИ НА ТОТАЛ
+                # ============================================================
+                total_result = should_send_total_signal(
+                    old["over_25"], match["over_25"],
+                    old["under_25"], match["under_25"],
+                    score_h, score_a, stats
+                )
+                
+                if total_result and total_result[0]:
+                    is_signal, total_type, old_total, new_total, drop_total = total_result
+                    msg = f"📉 <b>ПРОСАДКА КОЭФФИЦИЕНТА</b>\n"
+                    msg += f"🏆 {match['league']}\n"
+                    msg += f"⚽ {match['home']} vs {match['away']}\n"
+                    msg += f"📊 <b>ПРОСАДКА НА {total_type}</b>\n"
+                    msg += f"💰 {old_total:.2f} → {new_total:.2f} (⬇️ {drop_total:.2f})\n"
+                    msg += f"📊 Просадка: {((drop_total) / old_total * 100):.1f}%\n"
+                    msg += f"🎯 Счет: 0:0 ✅\n"
+                    if stats.get("minute"):
+                        msg += f"⏱️ Минута: {stats['minute']}'\n"
+                    if stats.get("possession_home") is not None and stats.get("possession_away") is not None:
+                        msg += f"📊 Владение: {stats['possession_home']}% vs {stats['possession_away']}%\n"
+                    if stats.get("shots_home") is not None and stats.get("shots_away") is not None:
+                        msg += f"🎯 Удары в створ: {stats['shots_home']} vs {stats['shots_away']}\n"
+                    if stats.get("corners_home") is not None and stats.get("corners_away") is not None:
+                        msg += f"🚩 Угловые: {stats['corners_home']} vs {stats['corners_away']}\n"
+                    msg += f"\n🔥 <b>СТАВКА:</b> {total_type}"
+
+                    if send_telegram(msg):
+                        last_total_signal_time[mid] = time.time()
+                        print(f"📤 Сигнал: {match['home']} vs {match['away']} — {total_type} (0:0)", flush=True)
 
                 last_data[mid]["p1"] = match["p1"]
                 last_data[mid]["p2"] = match["p2"]
+                last_data[mid]["over_25"] = match["over_25"]
+                last_data[mid]["under_25"] = match["under_25"]
 
             time.sleep(30)
 
