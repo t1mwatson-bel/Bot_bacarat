@@ -111,7 +111,7 @@ BLACKLIST_LEAGUES = [
     "Subway Surfers", "Sonic", "Crash", "Sekiro", "TABS", "Rumble Stars",
     "Robot Champions", "Boxing Champs", "Mega Baseball", "Raid Shadow Legends",
     "Power of Power", "Mutant League", "World of Warcraft", "Cuphead", "Regional League",
-    
+    "Куба", "Liga de Barrios",
     # ===== ТОВАРИЩЕСКИЕ =====
     "Club Friendlies", "Товарищеские"
 ]
