@@ -110,7 +110,7 @@ BLACKLIST_LEAGUES = [
     "Table Football", "Blade and Soul", "Assault Squad", "Cut The Rope",
     "Subway Surfers", "Sonic", "Crash", "Sekiro", "TABS", "Rumble Stars",
     "Robot Champions", "Boxing Champs", "Mega Baseball", "Raid Shadow Legends",
-    "Power of Power", "Mutant League", "World of Warcraft", "Cuphead",
+    "Power of Power", "Mutant League", "World of Warcraft", "Cuphead", "Regional League",
     
     # ===== ТОВАРИЩЕСКИЕ =====
     "Club Friendlies", "Товарищеские"
