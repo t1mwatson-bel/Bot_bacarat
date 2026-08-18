@@ -77,14 +77,29 @@ HEADERS = {
 # ЧЕРНЫЙ СПИСОК ЛИГ (ШУМ И КИБЕРСПОРТ)
 # =====================================================================
 BLACKLIST_LEAGUES = [
+    # ===== КОРОТКИЙ ФУТБОЛ =====
     "Short Football", "ShortFootball", "Short Football D1",
     "Short Football 4x4", "Short Football 5x5", "Short Football 3x3", "Short Football 2x2",
     "4x4", "5x5", "Division 4x4", "Division 5x5",
+    
+    # ===== LFL / 5x5 =====
     "BudnesLiga LFL 5x5", "BundesLiga LFL 5x5",
     "BudnesLiga", "BundesLiga", "LFL",
+    
+    # ===== MLS+ =====
     "MLS+",
+    
+    # ===== СТУДЕНЧЕСКИЕ =====
     "Student League", "Student League 2",
+    
+    # ===== SUBSOCCER (НОВЫЙ!) =====
+    "Subsoccer",
+    "sub",  # блокирует все (sub) в названиях
+    
+    # ===== ЛЮБИТЕЛЬСКИЕ =====
     "люб",
+    
+    # ===== КИБЕРСПОРТ =====
     "FIFA", "PES", "Кибер", "Esports", "Cyber", "eSports",
     "Mortal Kombat", "Tekken", "Counter Strike", "Dota",
     "World of tanks", "Rocket League", "StreetFighter", "Call of Duty",
@@ -96,6 +111,8 @@ BLACKLIST_LEAGUES = [
     "Subway Surfers", "Sonic", "Crash", "Sekiro", "TABS", "Rumble Stars",
     "Robot Champions", "Boxing Champs", "Mega Baseball", "Raid Shadow Legends",
     "Power of Power", "Mutant League", "World of Warcraft", "Cuphead",
+    
+    # ===== ТОВАРИЩЕСКИЕ =====
     "Club Friendlies", "Товарищеские"
 ]
 
@@ -275,10 +292,24 @@ def check_match_result(match_id):
     return {"status": "error"}
 
 def edit_result_report(entry):
-    """Редактирует исходное сообщение, дописывая результат"""
+    """Редактирует исходное сообщение, дописывая результат (голы ПОСЛЕ СИГНАЛА)"""
     result = entry.get("result")
     if not result:
         return
+
+    # Счет на момент сигнала
+    try:
+        score_h_signal, score_a_signal = map(int, entry['score'].split(':'))
+    except:
+        score_h_signal, score_a_signal = 0, 0
+
+    # Финальный счет
+    score_h_final = result.get("home", 0)
+    score_a_final = result.get("away", 0)
+
+    # Считаем голы ПОСЛЕ СИГНАЛА
+    home_goals_after = score_h_final - score_h_signal
+    away_goals_after = score_a_final - score_a_signal
 
     # Формируем обновленный текст
     msg = f"📉 <b>ПРОСАДКА КОЭФФИЦИЕНТА</b>\n"
@@ -299,18 +330,20 @@ def edit_result_report(entry):
     msg += f"\n🔥 <b>СТАВКА:</b> {entry['bet']}\n"
 
     # ДОПИСЫВАЕМ РЕЗУЛЬТАТ
-    if result.get("status") == "finished":
-        score_h = result.get("home", 0)
-        score_a = result.get("away", 0)
-        msg += f"\n📊 <b>ИТОГОВЫЙ СЧЕТ:</b> {score_h}:{score_a}\n"
-        if "хозяев" in entry['bet']:
-            msg += f"✅ <b>РЕЗУЛЬТАТ: ЗАШЛО!</b> 🎉" if score_h > 0.5 else f"❌ <b>РЕЗУЛЬТАТ: НЕ ЗАШЛО</b>"
-        elif "гостей" in entry['bet']:
-            msg += f"✅ <b>РЕЗУЛЬТАТ: ЗАШЛО!</b> 🎉" if score_a > 0.5 else f"❌ <b>РЕЗУЛЬТАТ: НЕ ЗАШЛО</b>"
-    elif result.get("status") == "not_found":
-        msg += f"\n⚠️ Матч не найден в API (возможно, удален)"
+    msg += f"\n📊 <b>ИТОГОВЫЙ СЧЕТ:</b> {score_h_final}:{score_a_final}\n"
+    
+    if "хозяев" in entry['bet']:
+        if home_goals_after > 0:
+            msg += f"✅ <b>РЕЗУЛЬТАТ: ЗАШЛО!</b> 🎉 (голов после сигнала: {home_goals_after})\n"
+        else:
+            msg += f"❌ <b>РЕЗУЛЬТАТ: НЕ ЗАШЛО</b> (голов после сигнала: 0)\n"
+    elif "гостей" in entry['bet']:
+        if away_goals_after > 0:
+            msg += f"✅ <b>РЕЗУЛЬТАТ: ЗАШЛО!</b> 🎉 (голов после сигнала: {away_goals_after})\n"
+        else:
+            msg += f"❌ <b>РЕЗУЛЬТАТ: НЕ ЗАШЛО</b> (голов после сигнала: 0)\n"
     else:
-        msg += f"\n⏳ Матч еще не завершен"
+        msg += f"⚠️ Неизвестный тип ставки\n"
 
     # Редактируем сообщение
     edit_telegram(entry["message_id"], msg)
@@ -345,8 +378,8 @@ def check_results():
 # ОСНОВНОЙ ЦИКЛ
 # =====================================================================
 def main():
-    print("✅ БОТ ГОТОВ К РАБОТЕ (ЧЕРНЫЙ СПИСОК + РЕДАКТИРОВАНИЕ СООБЩЕНИЙ)", flush=True)
-    send_telegram("🚀 Бот запущен! Результаты будут дописываться в исходные сообщения.")
+    print("✅ БОТ ГОТОВ К РАБОТЕ (ЧЕРНЫЙ СПИСОК + РЕДАКТИРОВАНИЕ + ПРОВЕРКА ГОЛОВ ПОСЛЕ СИГНАЛА)", flush=True)
+    send_telegram("🚀 Бот запущен! Результаты дописываются в исходные сообщения. Проверяются голы ПОСЛЕ СИГНАЛА.")
 
     last_data = {}
     last_signal_time = {}
