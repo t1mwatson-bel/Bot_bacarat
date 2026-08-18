@@ -2,8 +2,7 @@ import os
 import sys
 import time
 import requests
-import json
-from datetime import datetime, timedelta
+from datetime import datetime
 import pytz
 
 # =====================================================================
@@ -30,33 +29,16 @@ if not BOT_TOKEN or not CHAT_ID:
 MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 
 # =====================================================================
-# ОТПРАВКА И РЕДАКТИРОВАНИЕ В TELEGRAM
+# ОТПРАВКА В TELEGRAM
 # =====================================================================
 def send_telegram(text):
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}
         response = requests.post(url, json=payload, timeout=10)
-        if response.status_code == 200:
-            return response.json().get("result", {}).get("message_id")
-        return None
-    except Exception as e:
-        print(f"❌ Ошибка отправки: {e}", flush=True)
-        return None
-
-def edit_telegram(message_id, text):
-    try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText"
-        payload = {
-            "chat_id": CHAT_ID,
-            "message_id": message_id,
-            "text": text,
-            "parse_mode": "HTML"
-        }
-        response = requests.post(url, json=payload, timeout=10)
         return response.status_code == 200
     except Exception as e:
-        print(f"❌ Ошибка редактирования: {e}", flush=True)
+        print(f"❌ Ошибка отправки: {e}", flush=True)
         return False
 
 # =====================================================================
@@ -88,6 +70,7 @@ BLACKLIST_LEAGUES = [
     "люб",
     "Regional League",
     "Куба", "Liga de Barrios",
+    "Индии. Калькутта", "Калькутта",
     "FIFA", "PES", "Кибер", "Esports", "Cyber", "eSports",
     "Mortal Kombat", "Tekken", "Counter Strike", "Dota",
     "World of tanks", "Rocket League", "StreetFighter", "Call of Duty",
@@ -207,15 +190,28 @@ def parse_statistics(item):
 # =====================================================================
 # ФИЛЬТРЫ
 # =====================================================================
-def should_send_signal(old_coeff, current_coeff, score_home, score_away, stats):
+def should_send_signal(old_coeff, current_coeff, score_home, score_away, stats, home_drop, away_drop):
+    # 1. Проверка на слишком большой счет
     if score_home is not None and score_away is not None:
         if score_home > 4 or score_away > 4:
             return False
 
+    # 2. Не позднее 85-й минуты
     if stats.get("minute") and stats["minute"] > 85:
         return False
 
+    # 3. 🔥 Если владение 0% — пропускаем (нет данных)
+    if stats.get("possession_home") == 0 and stats.get("possession_away") == 0:
+        print(f"⏭️ Пропущен матч (владение 0%)", flush=True)
+        return False
+
+    # 4. 🔥 Если просадка на обе команды — пропускаем (конфликт)
     DROP_THRESHOLD = 0.5
+    if home_drop > DROP_THRESHOLD and away_drop > DROP_THRESHOLD:
+        print(f"⏭️ Пропущен матч (просадка на обе команды)", flush=True)
+        return False
+
+    # 5. Основные пороги
     MIN_COEFF = 1.5
     MIN_DROP_PERCENT = 15
 
@@ -233,168 +229,11 @@ def should_send_signal(old_coeff, current_coeff, score_home, score_away, stats):
     return True
 
 # =====================================================================
-# ИСТОРИЯ ДЛЯ ПРОВЕРКИ РЕЗУЛЬТАТОВ
-# =====================================================================
-history_file = "history.json"
-
-def load_history():
-    if os.path.exists(history_file):
-        with open(history_file, "r", encoding="utf-8") as f:
-            try:
-                return json.load(f)
-            except:
-                return []
-    return []
-
-def save_history(history):
-    with open(history_file, "w", encoding="utf-8") as f:
-        json.dump(history, f, indent=2, ensure_ascii=False)
-
-def add_to_history(signal_data):
-    history = load_history()
-    history.append(signal_data)
-    save_history(history)
-
-def check_match_result(match_id):
-    try:
-        response = requests.get(URL, headers=HEADERS, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            for item in data.get("Value", []):
-                if str(item.get("I")) == str(match_id):
-                    match_status = item.get("SC", {}).get("SS", 0)
-                    if match_status == 0:
-                        return {"status": "in_progress"}
-                    
-                    sc = item.get("SC", {})
-                    fs = sc.get("FS", {})
-                    if fs:
-                        return {
-                            "home": fs.get("S1", 0),
-                            "away": fs.get("S2", 0),
-                            "status": "finished"
-                        }
-                    else:
-                        return {"status": "not_finished"}
-            return {"status": "not_found"}
-    except Exception as e:
-        print(f"❌ Ошибка проверки результата: {e}", flush=True)
-    return {"status": "error"}
-
-def edit_result_report(entry, in_progress=False):
-    """Редактирует исходное сообщение, дописывая текущий счет или результат"""
-    result = entry.get("result")
-    
-    # Счет на момент сигнала
-    try:
-        score_h_signal, score_a_signal = map(int, entry['score'].split(':'))
-    except:
-        score_h_signal, score_a_signal = 0, 0
-
-    # Текущий счет (из результата или последнего сохраненного)
-    if result and result.get("status") == "finished":
-        score_h_final = result.get("home", 0)
-        score_a_final = result.get("away", 0)
-        status_text = "📊 <b>ИТОГОВЫЙ СЧЕТ</b>"
-    elif in_progress and "last_score" in entry:
-        score_h_final, score_a_final = map(int, entry["last_score"].split(':'))
-        status_text = "📊 <b>СЧЕТ ОБНОВЛЕН</b>"
-    else:
-        return
-
-    # Считаем голы ПОСЛЕ СИГНАЛА
-    home_goals_after = score_h_final - score_h_signal
-    away_goals_after = score_a_final - score_a_signal
-
-    # Формируем обновленный текст
-    msg = f"📉 <b>ПРОСАДКА КОЭФФИЦИЕНТА</b>\n"
-    msg += f"🏆 {entry['league']}\n"
-    msg += f"⚽ {entry['home']} vs {entry['away']}\n"
-    msg += f"📊 <b>{entry['bet']}</b>\n"
-    msg += f"💰 {entry['old_coeff']:.2f} → {entry['new_coeff']:.2f} (⬇️ {entry['drop']:.2f})\n"
-    msg += f"📊 Просадка: {entry['drop_percent']}%\n"
-    msg += f"🎯 Счет на момент сигнала: {entry['score']}\n"
-    if entry.get('minute'):
-        msg += f"⏱️ Минута: {entry['minute']}'\n"
-    if entry.get('possession'):
-        msg += f"📊 Владение: {entry['possession']}\n"
-    if entry.get('shots'):
-        msg += f"🎯 Удары в створ: {entry['shots']}\n"
-    if entry.get('corners'):
-        msg += f"🚩 Угловые: {entry['corners']}\n"
-    msg += f"\n🔥 <b>СТАВКА:</b> {entry['bet']}\n"
-
-    # Дописываем текущий счет
-    msg += f"\n{status_text}: {score_h_final}:{score_a_final}\n"
-    
-    if "хозяев" in entry['bet']:
-        if home_goals_after > 0:
-            msg += f"✅ <b>РЕЗУЛЬТАТ:</b> ЗАШЛО! 🎉 (голов после сигнала: {home_goals_after})\n"
-        else:
-            msg += f"❌ <b>РЕЗУЛЬТАТ:</b> НЕ ЗАШЛО (голов после сигнала: 0)\n"
-    elif "гостей" in entry['bet']:
-        if away_goals_after > 0:
-            msg += f"✅ <b>РЕЗУЛЬТАТ:</b> ЗАШЛО! 🎉 (голов после сигнала: {away_goals_after})\n"
-        else:
-            msg += f"❌ <b>РЕЗУЛЬТАТ:</b> НЕ ЗАШЛО (голов после сигнала: 0)\n"
-    else:
-        msg += f"⚠️ Неизвестный тип ставки\n"
-
-    # Редактируем сообщение
-    edit_telegram(entry["message_id"], msg)
-
-# =====================================================================
-# ПРОВЕРКА РЕЗУЛЬТАТОВ (каждые 5 минут, в реальном времени)
-# =====================================================================
-def check_results():
-    history = load_history()
-    updated = False
-
-    for entry in history:
-        if entry.get("result") is not None:
-            continue
-
-        result = check_match_result(entry["match_id"])
-        if not result:
-            continue
-
-        # Если матч еще идет
-        if result.get("status") == "in_progress":
-            # Проверяем, изменился ли счет
-            if "last_score" in entry:
-                try:
-                    last_h, last_a = map(int, entry["last_score"].split(':'))
-                except:
-                    last_h, last_a = 0, 0
-            else:
-                last_h, last_a = 0, 0
-
-            current_h = result.get("home", 0)
-            current_a = result.get("away", 0)
-
-            # Если счет изменился — обновляем
-            if current_h != last_h or current_a != last_a:
-                entry["last_score"] = f"{current_h}:{current_a}"
-                updated = True
-                edit_result_report(entry, in_progress=True)
-                print(f"🔄 Обновлен счет для матча {entry['match_id']}: {current_h}:{current_a}", flush=True)
-
-        # Если матч завершен
-        elif result.get("status") == "finished":
-            entry["result"] = result
-            updated = True
-            edit_result_report(entry, in_progress=False)
-            print(f"✅ Результат для матча {entry['match_id']}: {result.get('home')}:{result.get('away')}", flush=True)
-
-    if updated:
-        save_history(history)
-
-# =====================================================================
 # ОСНОВНОЙ ЦИКЛ
 # =====================================================================
 def main():
-    print("✅ БОТ ГОТОВ К РАБОТЕ (РЕАЛЬНОЕ ВРЕМЯ + РЕДАКТИРОВАНИЕ)", flush=True)
-    send_telegram("🚀 Бот запущен! Обновляет счет в реальном времени каждые 5 минут.")
+    print("✅ БОТ ГОТОВ К РАБОТЕ", flush=True)
+    send_telegram("🚀 Бот запущен! Фильтры: черный список, владение 0%, защита от двойных сигналов.")
 
     last_data = {}
     last_signal_time = {}
@@ -431,17 +270,21 @@ def main():
                     continue
 
                 old = last_data[mid]
+                
+                # Считаем просадки для защиты от двойных сигналов
+                home_drop = old["p1"] - match["p1"]
+                away_drop = old["p2"] - match["p2"]
 
                 # ПРОСАДКА НА ХОЗЯЕВ
-                if should_send_signal(old["p1"], match["p1"], score_h, score_a, stats):
+                if should_send_signal(old["p1"], match["p1"], score_h, score_a, stats, home_drop, away_drop):
                     signal_key = f"{mid}_p1"
                     if signal_key not in last_signal_time or (time.time() - last_signal_time[signal_key]) > 60:
                         msg = f"📉 <b>ПРОСАДКА КОЭФФИЦИЕНТА</b>\n"
                         msg += f"🏆 {match['league']}\n"
                         msg += f"⚽ {match['home']} vs {match['away']}\n"
                         msg += f"📊 <b>ПРОСАДКА НА ХОЗЯЕВ</b>\n"
-                        msg += f"💰 {old['p1']:.2f} → {match['p1']:.2f} (⬇️ {old['p1'] - match['p1']:.2f})\n"
-                        msg += f"📊 Просадка: {((old['p1'] - match['p1']) / old['p1'] * 100):.1f}%\n"
+                        msg += f"💰 {old['p1']:.2f} → {match['p1']:.2f} (⬇️ {home_drop:.2f})\n"
+                        msg += f"📊 Просадка: {((home_drop) / old['p1'] * 100):.1f}%\n"
                         msg += f"🎯 Текущий счет: {score_h}:{score_a}\n"
                         if stats.get("minute"):
                             msg += f"⏱️ Минута: {stats['minute']}'\n"
@@ -453,42 +296,20 @@ def main():
                             msg += f"🚩 Угловые: {stats['corners_home']} vs {stats['corners_away']}\n"
                         msg += f"\n🔥 <b>СТАВКА:</b> ИТБ хозяев ({match['home']})"
 
-                        message_id = send_telegram(msg)
-                        if message_id:
+                        if send_telegram(msg):
                             last_signal_time[signal_key] = time.time()
                             print(f"📤 Сигнал: {match['home']} — П1 (счет {score_h}:{score_a})", flush=True)
 
-                            add_to_history({
-                                "match_id": mid,
-                                "league": match['league'],
-                                "home": match['home'],
-                                "away": match['away'],
-                                "bet": f"ИТБ хозяев ({match['home']})",
-                                "old_coeff": old['p1'],
-                                "new_coeff": match['p1'],
-                                "drop": old['p1'] - match['p1'],
-                                "drop_percent": round(((old['p1'] - match['p1']) / old['p1'] * 100), 1),
-                                "score": f"{score_h}:{score_a}",
-                                "minute": stats.get("minute"),
-                                "possession": f"{stats.get('possession_home')}% vs {stats.get('possession_away')}%" if stats.get('possession_home') else None,
-                                "shots": f"{stats.get('shots_home')} vs {stats.get('shots_away')}" if stats.get('shots_home') else None,
-                                "corners": f"{stats.get('corners_home')} vs {stats.get('corners_away')}" if stats.get('corners_home') else None,
-                                "message_id": message_id,
-                                "signal_time": datetime.now().isoformat(),
-                                "result": None,
-                                "last_score": f"{score_h}:{score_a}"
-                            })
-
                 # ПРОСАДКА НА ГОСТЕЙ
-                if should_send_signal(old["p2"], match["p2"], score_h, score_a, stats):
+                if should_send_signal(old["p2"], match["p2"], score_h, score_a, stats, home_drop, away_drop):
                     signal_key = f"{mid}_p2"
                     if signal_key not in last_signal_time or (time.time() - last_signal_time[signal_key]) > 60:
                         msg = f"📉 <b>ПРОСАДКА КОЭФФИЦИЕНТА</b>\n"
                         msg += f"🏆 {match['league']}\n"
                         msg += f"⚽ {match['home']} vs {match['away']}\n"
                         msg += f"📊 <b>ПРОСАДКА НА ГОСТЕЙ</b>\n"
-                        msg += f"💰 {old['p2']:.2f} → {match['p2']:.2f} (⬇️ {old['p2'] - match['p2']:.2f})\n"
-                        msg += f"📊 Просадка: {((old['p2'] - match['p2']) / old['p2'] * 100):.1f}%\n"
+                        msg += f"💰 {old['p2']:.2f} → {match['p2']:.2f} (⬇️ {away_drop:.2f})\n"
+                        msg += f"📊 Просадка: {((away_drop) / old['p2'] * 100):.1f}%\n"
                         msg += f"🎯 Текущий счет: {score_h}:{score_a}\n"
                         if stats.get("minute"):
                             msg += f"⏱️ Минута: {stats['minute']}'\n"
@@ -500,39 +321,12 @@ def main():
                             msg += f"🚩 Угловые: {stats['corners_home']} vs {stats['corners_away']}\n"
                         msg += f"\n🔥 <b>СТАВКА:</b> ИТБ гостей ({match['away']})"
 
-                        message_id = send_telegram(msg)
-                        if message_id:
+                        if send_telegram(msg):
                             last_signal_time[signal_key] = time.time()
                             print(f"📤 Сигнал: {match['away']} — П2 (счет {score_h}:{score_a})", flush=True)
 
-                            add_to_history({
-                                "match_id": mid,
-                                "league": match['league'],
-                                "home": match['home'],
-                                "away": match['away'],
-                                "bet": f"ИТБ гостей ({match['away']})",
-                                "old_coeff": old['p2'],
-                                "new_coeff": match['p2'],
-                                "drop": old['p2'] - match['p2'],
-                                "drop_percent": round(((old['p2'] - match['p2']) / old['p2'] * 100), 1),
-                                "score": f"{score_h}:{score_a}",
-                                "minute": stats.get("minute"),
-                                "possession": f"{stats.get('possession_home')}% vs {stats.get('possession_away')}%" if stats.get('possession_home') else None,
-                                "shots": f"{stats.get('shots_home')} vs {stats.get('shots_away')}" if stats.get('shots_home') else None,
-                                "corners": f"{stats.get('corners_home')} vs {stats.get('corners_away')}" if stats.get('corners_home') else None,
-                                "message_id": message_id,
-                                "signal_time": datetime.now().isoformat(),
-                                "result": None,
-                                "last_score": f"{score_h}:{score_a}"
-                            })
-
                 last_data[mid]["p1"] = match["p1"]
                 last_data[mid]["p2"] = match["p2"]
-
-            # Проверка результатов каждые 5 минут
-            if int(time.time()) % 300 < 30:
-                check_results()
-                print("📊 Проверка результатов выполнена", flush=True)
 
             time.sleep(30)
 
