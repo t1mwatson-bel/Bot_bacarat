@@ -77,29 +77,17 @@ HEADERS = {
 # ЧЕРНЫЙ СПИСОК ЛИГ (ШУМ И КИБЕРСПОРТ)
 # =====================================================================
 BLACKLIST_LEAGUES = [
-    # ===== КОРОТКИЙ ФУТБОЛ =====
     "Short Football", "ShortFootball", "Short Football D1",
     "Short Football 4x4", "Short Football 5x5", "Short Football 3x3", "Short Football 2x2",
     "4x4", "5x5", "Division 4x4", "Division 5x5",
-    
-    # ===== LFL / 5x5 =====
     "BudnesLiga LFL 5x5", "BundesLiga LFL 5x5",
     "BudnesLiga", "BundesLiga", "LFL",
-    
-    # ===== MLS+ =====
     "MLS+",
-    
-    # ===== СТУДЕНЧЕСКИЕ =====
     "Student League", "Student League 2",
-    
-    # ===== SUBSOCCER (НОВЫЙ!) =====
-    "Subsoccer",
-    "sub",  # блокирует все (sub) в названиях
-    
-    # ===== ЛЮБИТЕЛЬСКИЕ =====
+    "Subsoccer", "sub",
     "люб",
-    
-    # ===== КИБЕРСПОРТ =====
+    "Regional League",
+    "Куба", "Liga de Barrios",
     "FIFA", "PES", "Кибер", "Esports", "Cyber", "eSports",
     "Mortal Kombat", "Tekken", "Counter Strike", "Dota",
     "World of tanks", "Rocket League", "StreetFighter", "Call of Duty",
@@ -110,9 +98,7 @@ BLACKLIST_LEAGUES = [
     "Table Football", "Blade and Soul", "Assault Squad", "Cut The Rope",
     "Subway Surfers", "Sonic", "Crash", "Sekiro", "TABS", "Rumble Stars",
     "Robot Champions", "Boxing Champs", "Mega Baseball", "Raid Shadow Legends",
-    "Power of Power", "Mutant League", "World of Warcraft", "Cuphead", "Regional League",
-    "Куба", "Liga de Barrios",
-    # ===== ТОВАРИЩЕСКИЕ =====
+    "Power of Power", "Mutant League", "World of Warcraft", "Cuphead",
     "Club Friendlies", "Товарищеские"
 ]
 
@@ -276,6 +262,10 @@ def check_match_result(match_id):
             data = response.json()
             for item in data.get("Value", []):
                 if str(item.get("I")) == str(match_id):
+                    match_status = item.get("SC", {}).get("SS", 0)
+                    if match_status == 0:
+                        return {"status": "in_progress"}
+                    
                     sc = item.get("SC", {})
                     fs = sc.get("FS", {})
                     if fs:
@@ -291,21 +281,26 @@ def check_match_result(match_id):
         print(f"❌ Ошибка проверки результата: {e}", flush=True)
     return {"status": "error"}
 
-def edit_result_report(entry):
-    """Редактирует исходное сообщение, дописывая результат (голы ПОСЛЕ СИГНАЛА)"""
+def edit_result_report(entry, in_progress=False):
+    """Редактирует исходное сообщение, дописывая текущий счет или результат"""
     result = entry.get("result")
-    if not result:
-        return
-
+    
     # Счет на момент сигнала
     try:
         score_h_signal, score_a_signal = map(int, entry['score'].split(':'))
     except:
         score_h_signal, score_a_signal = 0, 0
 
-    # Финальный счет
-    score_h_final = result.get("home", 0)
-    score_a_final = result.get("away", 0)
+    # Текущий счет (из результата или последнего сохраненного)
+    if result and result.get("status") == "finished":
+        score_h_final = result.get("home", 0)
+        score_a_final = result.get("away", 0)
+        status_text = "📊 <b>ИТОГОВЫЙ СЧЕТ</b>"
+    elif in_progress and "last_score" in entry:
+        score_h_final, score_a_final = map(int, entry["last_score"].split(':'))
+        status_text = "📊 <b>СЧЕТ ОБНОВЛЕН</b>"
+    else:
+        return
 
     # Считаем голы ПОСЛЕ СИГНАЛА
     home_goals_after = score_h_final - score_h_signal
@@ -329,19 +324,19 @@ def edit_result_report(entry):
         msg += f"🚩 Угловые: {entry['corners']}\n"
     msg += f"\n🔥 <b>СТАВКА:</b> {entry['bet']}\n"
 
-    # ДОПИСЫВАЕМ РЕЗУЛЬТАТ
-    msg += f"\n📊 <b>ИТОГОВЫЙ СЧЕТ:</b> {score_h_final}:{score_a_final}\n"
+    # Дописываем текущий счет
+    msg += f"\n{status_text}: {score_h_final}:{score_a_final}\n"
     
     if "хозяев" in entry['bet']:
         if home_goals_after > 0:
-            msg += f"✅ <b>РЕЗУЛЬТАТ: ЗАШЛО!</b> 🎉 (голов после сигнала: {home_goals_after})\n"
+            msg += f"✅ <b>РЕЗУЛЬТАТ:</b> ЗАШЛО! 🎉 (голов после сигнала: {home_goals_after})\n"
         else:
-            msg += f"❌ <b>РЕЗУЛЬТАТ: НЕ ЗАШЛО</b> (голов после сигнала: 0)\n"
+            msg += f"❌ <b>РЕЗУЛЬТАТ:</b> НЕ ЗАШЛО (голов после сигнала: 0)\n"
     elif "гостей" in entry['bet']:
         if away_goals_after > 0:
-            msg += f"✅ <b>РЕЗУЛЬТАТ: ЗАШЛО!</b> 🎉 (голов после сигнала: {away_goals_after})\n"
+            msg += f"✅ <b>РЕЗУЛЬТАТ:</b> ЗАШЛО! 🎉 (голов после сигнала: {away_goals_after})\n"
         else:
-            msg += f"❌ <b>РЕЗУЛЬТАТ: НЕ ЗАШЛО</b> (голов после сигнала: 0)\n"
+            msg += f"❌ <b>РЕЗУЛЬТАТ:</b> НЕ ЗАШЛО (голов после сигнала: 0)\n"
     else:
         msg += f"⚠️ Неизвестный тип ставки\n"
 
@@ -349,7 +344,7 @@ def edit_result_report(entry):
     edit_telegram(entry["message_id"], msg)
 
 # =====================================================================
-# ПРОВЕРКА РЕЗУЛЬТАТОВ (каждые 5 минут)
+# ПРОВЕРКА РЕЗУЛЬТАТОВ (каждые 5 минут, в реальном времени)
 # =====================================================================
 def check_results():
     history = load_history()
@@ -360,16 +355,36 @@ def check_results():
             continue
 
         result = check_match_result(entry["match_id"])
-        if result and result.get("status") == "finished":
+        if not result:
+            continue
+
+        # Если матч еще идет
+        if result.get("status") == "in_progress":
+            # Проверяем, изменился ли счет
+            if "last_score" in entry:
+                try:
+                    last_h, last_a = map(int, entry["last_score"].split(':'))
+                except:
+                    last_h, last_a = 0, 0
+            else:
+                last_h, last_a = 0, 0
+
+            current_h = result.get("home", 0)
+            current_a = result.get("away", 0)
+
+            # Если счет изменился — обновляем
+            if current_h != last_h or current_a != last_a:
+                entry["last_score"] = f"{current_h}:{current_a}"
+                updated = True
+                edit_result_report(entry, in_progress=True)
+                print(f"🔄 Обновлен счет для матча {entry['match_id']}: {current_h}:{current_a}", flush=True)
+
+        # Если матч завершен
+        elif result.get("status") == "finished":
             entry["result"] = result
             updated = True
-            edit_result_report(entry)
-        elif result and result.get("status") == "not_found":
-            signal_time = datetime.fromisoformat(entry["signal_time"])
-            if datetime.now() > signal_time + timedelta(minutes=10):
-                entry["result"] = {"status": "not_found"}
-                updated = True
-                edit_result_report(entry)
+            edit_result_report(entry, in_progress=False)
+            print(f"✅ Результат для матча {entry['match_id']}: {result.get('home')}:{result.get('away')}", flush=True)
 
     if updated:
         save_history(history)
@@ -378,8 +393,8 @@ def check_results():
 # ОСНОВНОЙ ЦИКЛ
 # =====================================================================
 def main():
-    print("✅ БОТ ГОТОВ К РАБОТЕ (ЧЕРНЫЙ СПИСОК + РЕДАКТИРОВАНИЕ + ПРОВЕРКА ГОЛОВ ПОСЛЕ СИГНАЛА)", flush=True)
-    send_telegram("🚀 Бот запущен! Результаты дописываются в исходные сообщения. Проверяются голы ПОСЛЕ СИГНАЛА.")
+    print("✅ БОТ ГОТОВ К РАБОТЕ (РЕАЛЬНОЕ ВРЕМЯ + РЕДАКТИРОВАНИЕ)", flush=True)
+    send_telegram("🚀 Бот запущен! Обновляет счет в реальном времени каждые 5 минут.")
 
     last_data = {}
     last_signal_time = {}
@@ -417,7 +432,7 @@ def main():
 
                 old = last_data[mid]
 
-                # ===== ПРОСАДКА НА ХОЗЯЕВ =====
+                # ПРОСАДКА НА ХОЗЯЕВ
                 if should_send_signal(old["p1"], match["p1"], score_h, score_a, stats):
                     signal_key = f"{mid}_p1"
                     if signal_key not in last_signal_time or (time.time() - last_signal_time[signal_key]) > 60:
@@ -460,10 +475,11 @@ def main():
                                 "corners": f"{stats.get('corners_home')} vs {stats.get('corners_away')}" if stats.get('corners_home') else None,
                                 "message_id": message_id,
                                 "signal_time": datetime.now().isoformat(),
-                                "result": None
+                                "result": None,
+                                "last_score": f"{score_h}:{score_a}"
                             })
 
-                # ===== ПРОСАДКА НА ГОСТЕЙ =====
+                # ПРОСАДКА НА ГОСТЕЙ
                 if should_send_signal(old["p2"], match["p2"], score_h, score_a, stats):
                     signal_key = f"{mid}_p2"
                     if signal_key not in last_signal_time or (time.time() - last_signal_time[signal_key]) > 60:
@@ -506,16 +522,17 @@ def main():
                                 "corners": f"{stats.get('corners_home')} vs {stats.get('corners_away')}" if stats.get('corners_home') else None,
                                 "message_id": message_id,
                                 "signal_time": datetime.now().isoformat(),
-                                "result": None
+                                "result": None,
+                                "last_score": f"{score_h}:{score_a}"
                             })
 
                 last_data[mid]["p1"] = match["p1"]
-                last_data[mid]["p2"] = match["p2"]
+                last_data[mid]["p2"] = match[" выполнp2"]
 
-            # Проверка результатов каждые 5 минут
-            if int(time.time()) % 300 < 30:
+            # Провенаерка результатов каждые 5 минут
+            if", int(time.time()) % 300 flush < 30:
                 check_results()
-                print("📊 Проверка результатов выполнена", flush=True)
+                print("📊 Проверка результатов=True)
 
             time.sleep(30)
 
