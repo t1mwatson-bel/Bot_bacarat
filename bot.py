@@ -170,43 +170,44 @@ def parse_statistics(item):
     return stats_data
 
 def is_real_drop(old_coeff, current_coeff, score_home, score_away, stats, side):
-    """
-    Проверяет, является ли просадка "реальной" (не после гола/события)
-    """
-    # 1. Проверка скорости падения (если упало слишком быстро — пропускаем)
+    # 1. Проверка скорости падения
     drop = old_coeff - current_coeff
     if drop > 1.0:
-        # Если кэф упал больше чем на 1.0, проверяем, не было ли события
-        # Для простоты: если падение > 1.0 за 30 секунд — это событие
         return False
     
     # 2. Проверка на слишком большой счет
     if score_home is not None and score_away is not None:
-        # Если разница в счете больше 1 — пропускаем
         if abs(score_home - score_away) > 1:
             return False
-        
-        # Если кто-то забил 3+ гола — пропускаем (матч мертвый)
         if score_home > 2 or score_away > 2:
             return False
     
-    # 3. Проверка на владение и удары (команда должна доминировать)
+    # 3. Проверка на владение и удары
     if side == "home":
         possession = stats.get("possession_home", 0)
         shots = stats.get("shots_home", 0)
     else:
         possession = stats.get("possession_away", 0)
         shots = stats.get("shots_away", 0)
+
+    # 🔥 ПРЕОБРАЗУЕМ В ЧИСЛА
+    try:
+        possession = int(possession) if possession else 0
+    except:
+        possession = 0
     
-    # Если владение < 45% — пропускаем (команда не контролирует игру)
+    try:
+        shots = int(shots) if shots else 0
+    except:
+        shots = 0
+
     if possession < 45:
         return False
-    
-    # Если ударов в створ < 2 — пропускаем (нет угрозы)
+
     if shots < 2:
         return False
     
-    # 4. Проверка на минуту (не позднее 75-й)
+    # 4. Проверка на минуту
     if stats.get("minute") and stats["minute"] > 75:
         return False
     
