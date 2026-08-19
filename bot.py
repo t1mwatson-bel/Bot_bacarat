@@ -53,26 +53,13 @@ HEADERS = {
 # ЧЕРНЫЙ СПИСОК (КИБЕРСПОРТ + ШУМ)
 # =====================================================================
 BLACKLIST_LEAGUES = [
-    "Short Football", "ShortFootball", "Short Football D1",
-    "Short Football 4x4", "Short Football 5x5", "Short Football 3x3", "Short Football 2x2",
-    "4x4", "5x5", "Division 4x4", "Division 5x5",
+    "Short Football", "ShortFootball",
     "BudnesLiga LFL 5x5", "BundesLiga LFL 5x5",
-    "BudnesLiga", "BundesLiga", "LFL",
     "MLS+",
     "Student League", "Student League 2",
     "Subsoccer", "sub",
     "люб",
-    "FIFA", "PES", "Кибер", "Esports", "Cyber", "eSports",
-    "Mortal Kombat", "Tekken", "Counter Strike", "Dota",
-    "World of tanks", "Rocket League", "StreetFighter", "Call of Duty",
-    "Dead Or Alive", "WWE", "King of Fighters", "Overwatch", "Looney Tunes",
-    "Hellish Quart", "Need for Speed", "Fatal Fury", "Roller Champions",
-    "Guilty Gear", "GigaBash", "Angry Birds", "SEGA", "StarCraft", "Injustice",
-    "Flatout", "LaserLeague", "CrossOut", "Pixel Cup", "Killer Instinct",
-    "Table Football", "Blade and Soul", "Assault Squad", "Cut The Rope",
-    "Subway Surfers", "Sonic", "Crash", "Sekiro", "TABS", "Rumble Stars",
-    "Robot Champions", "Boxing Champs", "Mega Baseball", "Raid Shadow Legends",
-    "Power of Power", "Mutant League", "World of Warcraft", "Cuphead",
+    "FIFA", "PES", "Кибер", "Esports",
     "Club Friendlies", "Товарищеские"
 ]
 
@@ -137,4 +124,164 @@ def parse_matches(data):
     return matches
 
 def parse_statistics(item):
-    stats
+    stats_data = {
+        "minute": None,
+        "possession_home": None,
+        "possession_away": None,
+        "shots_home": None,
+        "shots_away": None,
+        "corners_home": None,
+        "corners_away": None
+    }
+
+    sc = item.get("SC", {})
+
+    ts = sc.get("TS", 0)
+    if ts and ts > 0:
+        stats_data["minute"] = ts // 60
+
+    for stat in sc.get("ST", []):
+        if stat.get("Key") == 0:
+            for s in stat.get("Value", []):
+                sid = s.get("ID")
+                if sid == 29:
+                    stats_data["possession_home"] = s.get("S1")
+                    stats_data["possession_away"] = s.get("S2")
+                elif sid == 59:
+                    stats_data["shots_home"] = s.get("S1")
+                    stats_data["shots_away"] = s.get("S2")
+                elif sid == 70:
+                    stats_data["corners_home"] = s.get("S1")
+                    stats_data["corners_away"] = s.get("S2")
+
+    return stats_data
+
+def should_send_signal(old_coeff, current_coeff, score_home, score_away, stats):
+    # 1. 0:0
+    if score_home != 0 or score_away != 0:
+        return False
+
+    # 2. Не позднее 85-й минуты
+    minute = stats.get("minute")
+    if minute is not None and minute > 85:
+        return False
+
+    # 3. Пороги
+    DROP_THRESHOLD = 0.4
+    MIN_COEFF = 1.5
+    MIN_DROP_PERCENT = 12
+
+    if old_coeff < MIN_COEFF:
+        return False
+
+    drop = old_coeff - current_coeff
+    if drop < DROP_THRESHOLD:
+        return False
+
+    drop_percent = (drop / old_coeff) * 100
+    if drop_percent < MIN_DROP_PERCENT:
+        return False
+
+    return True
+
+def main():
+    print("🔥 БОТ ЗАПУСКАЕТСЯ", flush=True)
+    send_telegram("🚀 Бот запущен (стабильная версия, 0:0)")
+
+    last_data = {}
+    last_signal_time = {}
+
+    while True:
+        try:
+            print(f"\n🕐 {datetime.now(MOSCOW_TZ).strftime('%H:%M:%S')} - ПРОВЕРКА", flush=True)
+
+            data = fetch_data()
+            if not data:
+                time.sleep(30)
+                continue
+
+            matches = parse_matches(data)
+            print(f"📊 Найдено матчей: {len(matches)}", flush=True)
+
+            for match in matches:
+                mid = match["id"]
+                
+                if mid in last_signal_time:
+                    continue
+                
+                score_h = match.get("score_home")
+                score_a = match.get("score_away")
+                stats = parse_statistics(match.get("item", {}))
+
+                if score_h is None or score_a is None:
+                    continue
+
+                if mid not in last_data:
+                    last_data[mid] = {
+                        "p1": match["p1"],
+                        "p2": match["p2"],
+                        "home": match["home"],
+                        "away": match["away"],
+                        "league": match["league"]
+                    }
+                    continue
+
+                old = last_data[mid]
+
+                if should_send_signal(old["p1"], match["p1"], score_h, score_a, stats):
+                    home_drop = old["p1"] - match["p1"]
+                    msg = f"📉 <b>ПРОСАДКА КОЭФФИЦИЕНТА</b>\n"
+                    msg += f"🏆 {match['league']}\n"
+                    msg += f"⚽ {match['home']} vs {match['away']}\n"
+                    msg += f"📊 <b>ПРОСАДКА НА ХОЗЯЕВ</b>\n"
+                    msg += f"💰 {old['p1']:.2f} → {match['p1']:.2f} (⬇️ {home_drop:.2f})\n"
+                    msg += f"📊 Просадка: {((home_drop) / old['p1'] * 100):.1f}%\n"
+                    msg += f"🎯 Счет: 0:0 ✅\n"
+                    if stats.get("minute"):
+                        msg += f"⏱️ Минута: {stats['minute']}'\n"
+                    if stats.get("possession_home") is not None and stats.get("possession_away") is not None:
+                        msg += f"📊 Владение: {stats['possession_home']}% vs {stats['possession_away']}%\n"
+                    if stats.get("shots_home") is not None and stats.get("shots_away") is not None:
+                        msg += f"🎯 Удары в створ: {stats['shots_home']} vs {stats['shots_away']}\n"
+                    if stats.get("corners_home") is not None and stats.get("corners_away") is not None:
+                        msg += f"🚩 Угловые: {stats['corners_home']} vs {stats['corners_away']}\n"
+                    msg += f"\n🔥 <b>СТАВКА:</b> ИТБ хозяев ({match['home']})"
+
+                    if send_telegram(msg):
+                        last_signal_time[mid] = time.time()
+                        print(f"📤 Сигнал: {match['home']} — П1 (0:0)", flush=True)
+
+                if should_send_signal(old["p2"], match["p2"], score_h, score_a, stats):
+                    away_drop = old["p2"] - match["p2"]
+                    msg = f"📉 <b>ПРОСАДКА КОЭФФИЦИЕНТА</b>\n"
+                    msg += f"🏆 {match['league']}\n"
+                    msg += f"⚽ {match['home']} vs {match['away']}\n"
+                    msg += f"📊 <b>ПРОСАДКА НА ГОСТЕЙ</b>\n"
+                    msg += f"💰 {old['p2']:.2f} → {match['p2']:.2f} (⬇️ {away_drop:.2f})\n"
+                    msg += f"📊 Просадка: {((away_drop) / old['p2'] * 100):.1f}%\n"
+                    msg += f"🎯 Счет: 0:0 ✅\n"
+                    if stats.get("minute"):
+                        msg += f"⏱️ Минута: {stats['minute']}'\n"
+                    if stats.get("possession_home") is not None and stats.get("possession_away") is not None:
+                        msg += f"📊 Владение: {stats['possession_home']}% vs {stats['possession_away']}%\n"
+                    if stats.get("shots_home") is not None and stats.get("shots_away") is not None:
+                        msg += f"🎯 Удары в створ: {stats['shots_home']} vs {stats['shots_away']}\n"
+                    if stats.get("corners_home") is not None and stats.get("corners_away") is not None:
+                        msg += f"🚩 Угловые: {stats['corners_home']} vs {stats['corners_away']}\n"
+                    msg += f"\n🔥 <b>СТАВКА:</b> ИТБ гостей ({match['away']})"
+
+                    if send_telegram(msg):
+                        last_signal_time[mid] = time.time()
+                        print(f"📤 Сигнал: {match['away']} — П2 (0:0)", flush=True)
+
+                last_data[mid]["p1"] = match["p1"]
+                last_data[mid]["p2"] = match["p2"]
+
+            time.sleep(30)
+
+        except Exception as e:
+            print(f"❌ Ошибка в основном цикле: {e}", flush=True)
+            time.sleep(30)
+
+if __name__ == "__main__":
+    main()
