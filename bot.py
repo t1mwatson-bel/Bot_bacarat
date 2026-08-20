@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 # =====================================================================
 sys.stdout.flush()
 print("=" * 60, flush=True)
-print("🃏 ПРОГНОЗИСТ 21 ОЧКО - ФИЛЬТРАЦИЯ (ОБЩЕЕ ЧИСЛО 6-10 ≥ 4)", flush=True)
+print("🃏 ПРОГНОЗИСТ 21 ОЧКО - ФИЛЬТРАЦИЯ", flush=True)
 print("=" * 60, flush=True)
 
 # =====================================================================
@@ -51,12 +51,16 @@ PREDICT_INTERVAL = 300  # 5 минут
 # ФУНКЦИИ
 # =====================================================================
 def is_skip_game(text, game_data=None):
-    """Проверяет, нужно ли пропустить игру"""
-    # 1. Пропускаем игры с ⚠️
-    if "⚠️" in text:
+    """Проверяет, нужно ли пропустить игру для прогноза"""
+    # 1. Пропускаем, если есть 21
+    if "21" in text:
         return True
     
-    # 2. Пропускаем игры, где общее количество числовых карт (6-10) ≥ 4
+    # 2. Пропускаем, если ничья
+    if "🔰" in text:
+        return True
+    
+    # 3. Пропускаем, если общее число числовых карт (6-10) ≥ 4
     if game_data:
         numeric = ['6', '7', '8', '9', '10']
         count = 0
@@ -70,15 +74,6 @@ def is_skip_game(text, game_data=None):
             return True
     
     return False
-
-def count_numeric_cards(cards):
-    """Считает количество карт с числовыми значениями (6-10)"""
-    numeric = ['6', '7', '8', '9', '10']
-    count = 0
-    for card in cards:
-        if card["rank"] in numeric:
-            count += 1
-    return count
 
 def get_updates(offset):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
@@ -350,7 +345,7 @@ def main():
     print(f"📊 Читает канал: {CHANNEL_STATS}", flush=True)
     print(f"📤 Отправляет в: {CHANNEL_PROGNOZ}", flush=True)
     print("=" * 60, flush=True)
-    print("📌 Фильтры: ⚠️ и общее число 6-10 ≥ 4 — пропускаются")
+    print("📌 Фильтры: 21, 🔰, общее число 6-10 ≥ 4 — пропускаются")
     print("=" * 60, flush=True)
     
     offset = get_offset()
@@ -406,9 +401,9 @@ def main():
                     print(f"❌ Не удалось распарсить #N{game_number}", flush=True)
                     continue
                 
-                # 🔥 ФИЛЬТРАЦИЯ ПО ⚠️ И ОБЩЕМУ ЧИСЛУ 6-10
+                # 🔥 ФИЛЬТРАЦИЯ
                 if is_skip_game(text, game_data):
-                    print(f"⏭️ Пропускаем #N{game_number} (⚠️ или числовых ≥ 4)", flush=True)
+                    print(f"⏭️ Пропускаем #N{game_number} (21, 🔰 или числовых ≥ 4)", flush=True)
                     continue
                 
                 # Рандом: 30% шанс дать прогноз
