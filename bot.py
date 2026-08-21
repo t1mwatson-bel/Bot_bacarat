@@ -11,7 +11,7 @@ import pytz
 # =====================================================================
 sys.stdout.flush()
 print("=" * 60, flush=True)
-print("🃏 ПАРСЕР 21 КЛАССИК - ТОЛЬКО ЖИВЫЕ ИГРЫ", flush=True)
+print("🃏 ПАРСЕР 21 КЛАССИК - УВЕЛИЧЕННОЕ ОЖИДАНИЕ", flush=True)
 print("=" * 60, flush=True)
 
 # =====================================================================
@@ -68,7 +68,6 @@ def get_active_game_id():
                 if game.get("liga", {}).get("id") == 2092323:
                     game_id = game.get("id")
                     if game_id:
-                        # Проверяем, живая ли игра
                         scores = game.get("scores", {})
                         statistic = scores.get("statistic", {}).get("main", {})
                         state = statistic.get("STATE", "0")
@@ -259,6 +258,7 @@ def main():
             game_finished = False
             last_cards_hash = None
             no_update_count = 0
+            max_no_update = 60  # Увеличил до 60 (примерно 9-10 секунд)
             
             while not game_finished:
                 game_data = get_game_data(game_id)
@@ -287,7 +287,7 @@ def main():
                         
                         if cards_hash != last_cards_hash:
                             last_cards_hash = cards_hash
-                            no_update_count = 0
+                            no_update_count = 0  # Сбрасываем счетчик при обновлении
                             
                             msg = build_message(game_number, player_cards, dealer_cards, p_score, d_score, state)
                             
@@ -300,19 +300,27 @@ def main():
                             print(f"🔄 {msg}", flush=True)
                             
                             # Проверка завершения
-                            if state in ["4", "5"] or p_score >= 21 or d_score >= 21 or (dealer_cards and len(dealer_cards) >= 2 and d_score >= 17):
+                            if state in ["4", "5"]:
                                 game_finished = True
-                                print(f"🏁 Игра #{game_number} завершена", flush=True)
+                                print(f"🏁 Игра #{game_number} завершена (state={state})", flush=True)
+                                break
+                            elif p_score >= 21 or d_score >= 21:
+                                game_finished = True
+                                print(f"🏁 Игра #{game_number} завершена (21 очко)", flush=True)
+                                break
+                            elif dealer_cards and len(dealer_cards) >= 2 and d_score >= 17:
+                                game_finished = True
+                                print(f"🏁 Игра #{game_number} завершена (дилер набрал 17+)", flush=True)
                                 break
                         else:
                             no_update_count += 1
-                            # Если 20 раз без изменений - возможно игра зависла
-                            if no_update_count > 20:
-                                print("⚠️ Нет обновлений, возможно игра завершена", flush=True)
+                            # Ждем дольше - 60 циклов без обновлений (~9 секунд)
+                            if no_update_count > max_no_update:
+                                print(f"⚠️ Нет обновлений {max_no_update} циклов, возможно игра завершена", flush=True)
                                 game_finished = True
                                 break
                 
-                time.sleep(0.15)
+                time.sleep(0.15)  # Задержка между запросами
             
             print("⏰ Ожидание следующей игры...", flush=True)
             
