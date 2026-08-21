@@ -11,7 +11,7 @@ import pytz
 # =====================================================================
 sys.stdout.flush()
 print("=" * 60, flush=True)
-print("🃏 ПАРСЕР 21 КЛАССИК - УВЕЛИЧЕННОЕ ОЖИДАНИЕ", flush=True)
+print("🃏 ПАРСЕР 21 КЛАССИК - АКТИВНОЕ ОЖИДАНИЕ ИГР", flush=True)
 print("=" * 60, flush=True)
 
 # =====================================================================
@@ -72,14 +72,10 @@ def get_active_game_id():
                         statistic = scores.get("statistic", {}).get("main", {})
                         state = statistic.get("STATE", "0")
                         
-                        # Ищем только живые игры (state 0,1,2,3)
-                        if state in ["0", "1", "2", "3"]:
-                            print(f"✅ Найден ID живой игры: {game_id} (state={state})", flush=True)
-                            return str(game_id)
-                        else:
-                            print(f"⏭️ Игра {game_id} уже завершена (state={state})", flush=True)
+                        print(f"🔍 Найдена игра: {game_id} (state={state})", flush=True)
+                        return str(game_id)
             
-            print("⚠️ Живая игра 21 Классик не найдена", flush=True)
+            print("⚠️ Игра 21 Классик не найдена", flush=True)
         else:
             print(f"⚠️ Статус API: {response.status_code}", flush=True)
     except Exception as e:
@@ -214,119 +210,121 @@ def edit_message(message_id, text):
     except Exception as e:
         return False
 
-def wait_for_start():
-    while True:
-        now = datetime.now(MOSCOW_TZ)
-        if now.second == 59 and now.minute % 2 == 1:
-            return time.time()
-        time.sleep(0.05)
-
 # =====================================================================
-# ОСНОВНОЙ ЦИКЛ
+# ОСНОВНОЙ ЦИКЛ - АКТИВНОЕ ОЖИДАНИЕ
 # =====================================================================
 def main():
-    print("🔄 ПАРСЕР ЗАПУЩЕН, ОЖИДАНИЕ СТАРТА...", flush=True)
+    print("🔄 НЕПРЕРЫВНЫЙ МОНИТОРИНГ ЗАПУЩЕН...", flush=True)
     processed_games = set()
+    game_id = None
+    last_message_id = None
+    game_number = 0
+    last_cards_hash = None
+    game_started = False
+    waiting_for_new_game = False
     
     while True:
         try:
-            start_time = wait_for_start()
-            print(f"🕐 Старт в {datetime.fromtimestamp(start_time).strftime('%H:%M:%S')}", flush=True)
-            
-            time.sleep(1.5)
-            
-            print("🔍 Поиск живой игры...", flush=True)
-            game_id = None
-            
-            # Ищем живую игру
-            for attempt in range(10):
+            # Если игра завершена или еще не начата - ищем новую
+            if not game_id or waiting_for_new_game:
+                if not waiting_for_new_game:
+                    print("🔍 Поиск новой игры...", flush=True)
+                    waiting_for_new_game = True
+                
                 any_id = get_active_game_id()
+                
+                # Проверяем, что это новая игра (не обработанная)
                 if any_id and any_id not in processed_games:
                     game_id = any_id
                     processed_games.add(game_id)
-                    print(f"✅ Найдена живая игра: {game_id}", flush=True)
-                    break
-                time.sleep(0.5)
+                    print(f"✅ Найдена новая игра: {game_id}", flush=True)
+                    # Сбрасываем состояние
+                    last_cards_hash = None
+                    game_started = False
+                    last_message_id = None
+                    waiting_for_new_game = False
+                else:
+                    # Если игра уже обработана или не найдена - ждем
+                    time.sleep(1)
+                    continue
             
-            if not game_id:
-                print("❌ Живая игра не найдена, перезапуск...", flush=True)
-                continue
+            # Получаем данные игры
+            game_data = get_game_data(game_id)
             
-            game_started = False
-            last_message_id = None
-            game_number = 0
-            game_finished = False
-            last_cards_hash = None
-            no_update_count = 0
-            max_no_update = 60  # Увеличил до 60 (примерно 9-10 секунд)
-            
-            while not game_finished:
-                game_data = get_game_data(game_id)
+            if game_data:
+                scores = game_data.get("scores", {})
+                statistic = scores.get("statistic", {}).get("main", {})
                 
-                if game_data:
-                    scores = game_data.get("scores", {})
-                    statistic = scores.get("statistic", {}).get("main", {})
+                player_cards_json = statistic.get("P1", "[]")
+                dealer_cards_json = statistic.get("P2", "[]")
+                state = statistic.get("STATE", "0")
+                
+                player_cards = parse_cards_from_json(player_cards_json)
+                
+                # Если есть карты у игрока - игра началась
+                if player_cards:
+                    if not game_started:
+                        game_started = True
+                        game_number = get_game_number()
+                        print(f"🎯 Игра #{game_number} началась! (state={state})", flush=True)
                     
-                    player_cards_json = statistic.get("P1", "[]")
-                    dealer_cards_json = statistic.get("P2", "[]")
-                    state = statistic.get("STATE", "0")
+                    dealer_cards = parse_cards_from_json(dealer_cards_json) if dealer_cards_json != "[]" else []
+                    p_score = calculate_score(player_cards)
+                    d_score = calculate_score(dealer_cards) if dealer_cards else 0
                     
-                    player_cards = parse_cards_from_json(player_cards_json)
+                    cards_hash = f"{player_cards_json}{dealer_cards_json}"
                     
-                    if player_cards:
-                        if not game_started:
-                            game_started = True
-                            game_number = get_game_number()
-                            print(f"🎯 Игра #{game_number} началась!", flush=True)
+                    # Отправляем только при изменении карт
+                    if cards_hash != last_cards_hash:
+                        last_cards_hash = cards_hash
                         
-                        dealer_cards = parse_cards_from_json(dealer_cards_json) if dealer_cards_json != "[]" else []
-                        p_score = calculate_score(player_cards)
-                        d_score = calculate_score(dealer_cards) if dealer_cards else 0
+                        msg = build_message(game_number, player_cards, dealer_cards, p_score, d_score, state)
                         
-                        cards_hash = f"{player_cards_json}{dealer_cards_json}"
-                        
-                        if cards_hash != last_cards_hash:
-                            last_cards_hash = cards_hash
-                            no_update_count = 0  # Сбрасываем счетчик при обновлении
-                            
-                            msg = build_message(game_number, player_cards, dealer_cards, p_score, d_score, state)
-                            
-                            if last_message_id:
-                                if not edit_message(last_message_id, msg):
-                                    last_message_id = send_message(msg)
-                            else:
+                        if last_message_id:
+                            if not edit_message(last_message_id, msg):
                                 last_message_id = send_message(msg)
-                            
-                            print(f"🔄 {msg}", flush=True)
-                            
-                            # Проверка завершения
-                            if state in ["4", "5"]:
-                                game_finished = True
-                                print(f"🏁 Игра #{game_number} завершена (state={state})", flush=True)
-                                break
-                            elif p_score >= 21 or d_score >= 21:
-                                game_finished = True
-                                print(f"🏁 Игра #{game_number} завершена (21 очко)", flush=True)
-                                break
-                            elif dealer_cards and len(dealer_cards) >= 2 and d_score >= 17:
-                                game_finished = True
-                                print(f"🏁 Игра #{game_number} завершена (дилер набрал 17+)", flush=True)
-                                break
                         else:
-                            no_update_count += 1
-                            # Ждем дольше - 60 циклов без обновлений (~9 секунд)
-                            if no_update_count > max_no_update:
-                                print(f"⚠️ Нет обновлений {max_no_update} циклов, возможно игра завершена", flush=True)
-                                game_finished = True
-                                break
-                
-                time.sleep(0.15)  # Задержка между запросами
+                            last_message_id = send_message(msg)
+                        
+                        print(f"🔄 {msg}", flush=True)
+                        
+                        # Проверка завершения
+                        if state in ["4", "5"]:
+                            print(f"🏁 Игра #{game_number} завершена (state={state})", flush=True)
+                            print(f"⏳ Ожидание следующей игры...", flush=True)
+                            waiting_for_new_game = True
+                            game_id = None
+                            continue
+                        elif p_score >= 21 or d_score >= 21:
+                            print(f"🏁 Игра #{game_number} завершена (21 очко)", flush=True)
+                            print(f"⏳ Ожидание следующей игры...", flush=True)
+                            waiting_for_new_game = True
+                            game_id = None
+                            continue
+                        elif dealer_cards and len(dealer_cards) >= 2 and d_score >= 17:
+                            print(f"🏁 Игра #{game_number} завершена (дилер набрал 17+)", flush=True)
+                            print(f"⏳ Ожидание следующей игры...", flush=True)
+                            waiting_for_new_game = True
+                            game_id = None
+                            continue
+                else:
+                    # Если у игрока нет карт, но игра уже началась - возможно пауза
+                    if game_started:
+                        # Небольшая пауза, но не сбрасываем игру
+                        pass
+            else:
+                # Если данные не получены - возможно игра удалена
+                if game_id:
+                    print(f"⚠️ Данные игры {game_id} не получены, ищем новую...", flush=True)
+                    waiting_for_new_game = True
+                    game_id = None
+                    continue
             
-            print("⏰ Ожидание следующей игры...", flush=True)
+            time.sleep(0.3)
             
         except Exception as e:
-            print(f"❌ Критическая ошибка: {e}", flush=True)
-            time.sleep(3)
+            print(f"❌ Ошибка: {e}", flush=True)
+            time.sleep(2)
 
 if __name__ == "__main__":
     main()
