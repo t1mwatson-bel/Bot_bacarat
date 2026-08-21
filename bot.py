@@ -138,30 +138,25 @@ def parse_cards_from_json(cards_json):
         return []
 
 def calculate_score(cards):
-    """Быстрый подсчет очков"""
+    """Подсчет очков - туз всегда 11"""
     if not cards:
         return 0
     
     score = 0
-    aces = 0
     
     for c in cards:
         cv = c.get("CV", 0)
-        if cv == 14:
-            aces += 1
+        if cv == 14:      # Туз = 11
             score += 11
-        elif cv == 13:
+        elif cv == 13:    # Король = 4
             score += 4
-        elif cv == 12:
+        elif cv == 12:    # Дама = 3
             score += 3
-        elif cv == 11:
+        elif cv == 11:    # Валет = 2
             score += 2
-        elif 6 <= cv <= 10:
+        elif 6 <= cv <= 10:  # 6,7,8,9,10
             score += cv
-    
-    while score > 21 and aces > 0:
-        score -= 10
-        aces -= 1
+        # Карты 2-5 не учитываются (в 21 классик они 0 очков)
     
     return score
 
