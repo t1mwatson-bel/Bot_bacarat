@@ -1,6 +1,5 @@
 import requests
 import json
-import re
 import time
 import os
 from datetime import datetime, timedelta
@@ -38,7 +37,7 @@ MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 messages = {}
 game_cache = {}
-processed_games = set()
+processed_games = []
 last_edit_time = {}
 
 SUITS_NAMES = {0: "♠️", 1: "♣️", 2: "♦️", 3: "♥️"}
@@ -80,8 +79,8 @@ def edit_telegram_message(message_id, text):
             return True
         else:
             if resp.status_code == 400:
-                print(f"⚠️ Не удалось отредактировать сообщение {message_id}, отправляем новое", flush=True)
-                return "resend"
+                print(f"⚠️ Не удалось отредактировать сообщение {message_id}, пытаемся заново", flush=True)
+                return False
             else:
                 print(f"❌ Ошибка редактирования: {resp.status_code}", flush=True)
                 return False
@@ -90,7 +89,6 @@ def edit_telegram_message(message_id, text):
         return False
 
 def can_edit(game_id):
-    """Проверяет, можно ли редактировать (не чаще 7 секунд)"""
     now = time.time()
     if game_id in last_edit_time:
         if now - last_edit_time[game_id] < 7:
@@ -98,36 +96,21 @@ def can_edit(game_id):
     last_edit_time[game_id] = now
     return True
 
-def safe_edit_or_resend(game_id, text):
-    """Безопасное редактирование или переотправка"""
+def safe_edit(game_id, text):
     if game_id in messages:
         if not can_edit(game_id):
             print(f"⏳ Игра {game_id}: ожидаем 7 секунд перед редактированием", flush=True)
             return True
         
         message_id = messages[game_id]
-        result = edit_telegram_message(message_id, text)
-        
-        if result == "resend":
-            del messages[game_id]
-            msg_id = send_telegram_message(text)
-            if msg_id:
-                messages[game_id] = msg_id
-                print(f"📤 Переотправлено: {text}", flush=True)
-                return True
-            return False
-        
-        if result:
-            print(f"🔄 Обновлена: {text}", flush=True)
-            return True
-        return False
-    
-    msg_id = send_telegram_message(text)
-    if msg_id:
-        messages[game_id] = msg_id
-        print(f"📤 Отправлено: {text}", flush=True)
-        return True
-    return False
+        while not edit_telegram_message(message_id, text):
+            print(f"🔄 Повторная попытка редактирования сообщения {message_id}", flush=True)
+            time.sleep(1)  # Небольшая задержка перед повтором
+    else:
+        msg_id = send_telegram_message(text)
+        if msg_id:
+            messages[game_id] = msg_id
+            print(f"📤 Отправлено: {text}", flush=True)
 
 # =====================================================================
 # ФУНКЦИИ ПАРСИНГА
@@ -150,19 +133,8 @@ def get_active_games():
         
         if response.status_code == 200:
             data = response.json()
-            
-            if isinstance(data, list):
-                games = data
-            elif isinstance(data, dict) and "Value" in data:
-                games = data.get("Value", [])
-            else:
-                print(f"⚠️ Неизвестный формат ответа", flush=True)
-                return []
-            
-            print(f"📊 Найдено игр в ответе: {len(games)}", flush=True)
-            
             active_games = []
-            for game in games:
+            for game in data.get('Value', []):
                 if game.get("liga", {}).get("id") == 2092323:
                     game_id = game.get("id")
                     if game_id and str(game_id) not in processed_games:
@@ -173,8 +145,6 @@ def get_active_games():
                         if state in ["0", "1", "2", "3"]:
                             active_games.append(game)
                             print(f"✅ Найдена живая игра: {game_id} (state={state})", flush=True)
-                        else:
-                            print(f"⏭️ Игра {game_id} завершена (state={state})", flush=True)
             
             print(f"📊 Активных игр (не обработанных): {len(active_games)}", flush=True)
             return active_games
@@ -214,7 +184,6 @@ def calculate_score(cards):
         return 0
     
     score = 0
-    
     for c in cards:
         cv = c.get("CV", 0)
         if cv == 14:
@@ -240,13 +209,7 @@ def is_game_finished(state, player_cards, dealer_cards, p_score, d_score):
     if d_score > 21:
         return True
     
-    if p_score == 21:
-        return True
-    
-    if d_score == 21:
-        return True
-    
-    if p_score >= 20:
+    if p_score == 21 or d_score == 21 or p_score >= 20:
         return True
     
     if dealer_cards and len(dealer_cards) >= 3:
@@ -277,18 +240,7 @@ def build_message(game_num, player_cards, dealer_cards, p_score, d_score, state)
             return f"#N{game_num}. {p_score}({p_hand}) - ✅{d_score}({d_hand}) #T{total}"
         return f"#N{game_num}. {p_score}({p_hand}) - 🔰{d_score}({d_hand}) #T{total}"
     
-    if not dealer_cards:
-        arrow = "◀️"
-    elif len(dealer_cards) == 1:
-        arrow = "◀️"
-    else:
-        if d_score < 17:
-            arrow = "▶️"
-        else:
-            if p_score <= 19:
-                arrow = "◀️"
-            else:
-                arrow = "⏹️"
+    arrow = "◀️" if not dealer_cards else "▶️" if d_score < 17 else "⏹️" if p_score > 19 else "◀️"
     
     return f"#N{game_num}. {p_score}({p_hand}) {arrow} {d_score}({d_hand}) #T{total}"
 
@@ -351,13 +303,16 @@ def main():
                 
                 msg = build_message(game_number, player_cards, dealer_cards, p_score, d_score, state)
                 
-                # ОТПРАВЛЯЕМ ИЛИ РЕДАКТИРУЕМ
-                safe_edit_or_resend(game_id, msg)
+                safe_edit(game_id, msg)
                 
                 if is_game_finished(state, player_cards, dealer_cards, p_score, d_score):
-                    processed_games.add(game_id)
+                    processed_games.append(game_id)
                     print(f"🏁 Игра {game_id} завершена", flush=True)
                 
+                # Очищаем историю, оставляя только последние 2 игры
+                if len(processed_games) > 2:
+                    processed_games.pop(0)
+
                 time.sleep(0.5)  # Небольшая задержка между играми
             
             # Очистка кэша
