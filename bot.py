@@ -21,18 +21,21 @@ print("=" * 60, flush=True)
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 CHAT_ID = os.getenv('CHAT_ID')
 
-# Проверяем, что переменные загружены
 if not BOT_TOKEN or not CHAT_ID:
-    print("❌ ОШИБКА: BOT_TOKEN или CHAT_ID не найдены в переменных окружения!", flush=True)
-    print("⚠️ Добавьте переменные на хостинге!", flush=True)
-    sys.exit(1)
+    print("❌ ОШИБКА: BOT_TOKEN или CHAT_ID не найдены!", flush=True)
+    exit(1)
 
-print(f"✅ BOT_TOKEN загружен с хостинга", flush=True)
-print(f"✅ CHAT_ID загружен с хостинга", flush=True)
+try:
+    CHAT_ID = int(CHAT_ID)
+except:
+    pass
+
+print(f"✅ BOT_TOKEN загружен: {BOT_TOKEN[:5]}...", flush=True)
+print(f"✅ CHAT_ID: {CHAT_ID}", flush=True)
 
 MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 
-API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 messages = {}
 game_cache = {}
 processed_games = set()
@@ -47,24 +50,50 @@ HEADERS = {
     "Cookie": "platform_type=desktop; SESSION=34219176f69eace1b636911e2de9a15e; lng=ru; cookies_agree_type=3; tzo=3; is12h=0; auid=uaJbk2qIgo2M+6ofAxNqAg==; _ym_isad=2; mdd=1; _ga_7JGWL9SV66=GS2.1.s1787337341$o4$g1$t1787337359$j42$l0$h1608459194; window_width=150; referral_values=%7B%22type%22%3A%22reflinkid%22%2C%22val%22%3A%22s_50970m_355c_%22%2C%22additional%22%3A%7B%22name_tag%22%3A%22tag%22%7D%7D; fatman_uuid=45f69ff0-ecb1-67d4-3ff2-3a45baafc739; che_g=777dc1b9-efbf-4728-947a-4a2992ef6da5; sh.session.id=684214c4-f09e-42da-9c1a-ea61b9aca91b; _ym_uid=1786989905737338437; _ym_d=1786989905; _ga=GA1.1.547872848.1786989906"
 }
 
+print("✅ Настройки загружены", flush=True)
 print("=" * 60, flush=True)
 
 # =====================================================================
-# ФУНКЦИИ
+# ФУНКЦИИ ДЛЯ ТЕЛЕГРАМ
+# =====================================================================
+def send_telegram_message(text):
+    try:
+        url = f"{API_URL}/sendMessage"
+        payload = {"chat_id": CHAT_ID, "text": text}
+        resp = requests.post(url, json=payload, timeout=5)
+        if resp.status_code == 200:
+            return resp.json().get("result", {}).get("message_id")
+        else:
+            print(f"❌ Ошибка отправки: {resp.status_code} - {resp.text}", flush=True)
+            return None
+    except Exception as e:
+        print(f"❌ Ошибка отправки: {e}", flush=True)
+        return None
+
+def edit_telegram_message(message_id, text):
+    try:
+        url = f"{API_URL}/editMessageText"
+        payload = {"chat_id": CHAT_ID, "message_id": message_id, "text": text}
+        resp = requests.post(url, json=payload, timeout=5)
+        if resp.status_code != 200:
+            print(f"❌ Ошибка редактирования: {resp.status_code}", flush=True)
+        return resp.status_code == 200
+    except Exception as e:
+        print(f"❌ Ошибка редактирования: {e}", flush=True)
+        return False
+
+# =====================================================================
+# ФУНКЦИИ ПАРСИНГА
 # =====================================================================
 def get_game_number():
-    """Номер игры от 1 до 720 (каждые 2 минуты, старт в 03:00)"""
+    """Номер игры от 1 до 1440 (каждые 2 минуты, старт в 03:00)"""
     now = datetime.now(MOSCOW_TZ)
     start = now.replace(hour=3, minute=0, second=0, microsecond=0)
     if now < start:
         start = start - timedelta(days=1)
     
-    # Разница в минутах
     diff_minutes = (now - start).total_seconds() / 60
-    
-    # Делим на 2 (игры каждые 2 минуты)
-    game_number = int(diff_minutes / 2) % 720 + 1
-    
+    game_number = int(diff_minutes / 2) % 720 + 1  # Делим на 2, т.к. игры каждые 2 минуты
     return game_number
 
 def get_active_games():
@@ -162,19 +191,37 @@ def calculate_score(cards):
 
 def is_game_finished(state, player_cards, dealer_cards, p_score, d_score):
     """Проверяет, завершена ли игра"""
+    
+    # 1. Если пришёл статус завершения
     if state in ["4", "5"]:
         return True
     
-    if p_score == 21 or d_score == 21:
+    # 2. Если у игрока перебор
+    if p_score > 21:
         return True
     
-    if p_score > 21 or d_score > 21:
+    # 3. Если у дилера перебор
+    if d_score > 21:
         return True
     
+    # 4. Если у игрока 21
+    if p_score == 21:
+        return True
+    
+    # 5. Если у дилера 21
+    if d_score == 21:
+        return True
+    
+    # 6. Если у игрока 20+ очков — он не может брать карты
     if p_score >= 20:
         return True
     
-    if dealer_cards and len(dealer_cards) >= 2 and d_score >= 17:
+    # 7. Если у дилера 3 карты — игра завершена
+    if dealer_cards and len(dealer_cards) >= 3:
+        return True
+    
+    # 8. Если у дилера 2 карты и 17+ очков, и у игрока 19+ очков
+    if dealer_cards and len(dealer_cards) >= 2 and d_score >= 17 and p_score >= 19:
         return True
     
     return False
@@ -199,6 +246,7 @@ def build_message(game_num, player_cards, dealer_cards, p_score, d_score, state)
             return f"#N{game_num}. {p_score}({p_hand}) - ✅{d_score}({d_hand}) #T{total}"
         return f"#N{game_num}. {p_score}({p_hand}) - 🔰{d_score}({d_hand}) #T{total}"
     
+    # Игра ещё идёт
     if not dealer_cards:
         arrow = "◀️"
     elif len(dealer_cards) == 1:
@@ -214,32 +262,13 @@ def build_message(game_num, player_cards, dealer_cards, p_score, d_score, state)
     
     return f"#N{game_num}. {p_score}({p_hand}) {arrow} {d_score}({d_hand}) #T{total}"
 
-def send_message(text):
-    try:
-        r = requests.post(API + "/sendMessage", json={"chat_id": CHAT_ID, "text": text})
-        if r.status_code == 200:
-            return r.json()["result"]["message_id"]
-    except Exception as e:
-        print(f"❌ Ошибка отправки: {e}", flush=True)
-    return None
-
-def edit_message(message_id, text):
-    try:
-        url = f"{API}/editMessageText"
-        payload = {"chat_id": CHAT_ID, "message_id": message_id, "text": text}
-        r = requests.post(url, json=payload)
-        return r.status_code == 200
-    except Exception as e:
-        print(f"❌ Ошибка редактирования: {e}", flush=True)
-        return False
-
 # =====================================================================
 # ОСНОВНОЙ ЦИКЛ
 # =====================================================================
 def main():
     global processed_games
     
-    print("🔄 ПАРСЕР ЗАПУЩЕН (МНОГОПОТОЧНЫЙ)", flush=True)
+    print("🔄 ПАРСЕР 21 CLASSICS ЗАПУЩЕН", flush=True)
     print("🕐 Игры каждые 2 минуты, старт в 03:00", flush=True)
     print("=" * 60, flush=True)
     
@@ -293,10 +322,10 @@ def main():
                 msg = build_message(game_number, player_cards, dealer_cards, p_score, d_score, state)
                 
                 if game_id in messages:
-                    edit_message(messages[game_id], msg)
+                    edit_telegram_message(messages[game_id], msg)
                     print(f"🔄 Обновлена игра {game_id}: {msg}", flush=True)
                 else:
-                    msg_id = send_message(msg)
+                    msg_id = send_telegram_message(msg)
                     if msg_id:
                         messages[game_id] = msg_id
                         print(f"📤 Новая игра {game_id}: {msg}", flush=True)
@@ -309,12 +338,15 @@ def main():
             
             if len(processed_games) > 200:
                 processed_games.clear()
+                messages.clear()
                 print("🗑️ Кэш обработанных игр очищен", flush=True)
             
             time.sleep(2)
             
         except Exception as e:
             print(f"❌ Критическая ошибка: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
             time.sleep(5)
 
 if __name__ == "__main__":
