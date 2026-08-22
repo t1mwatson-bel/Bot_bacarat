@@ -1,4 +1,4 @@
-Бро вот идеальный код но только ссылка чуть отличается import requests
+import requests
 import json
 import re
 import time
