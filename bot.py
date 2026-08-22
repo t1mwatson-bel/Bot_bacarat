@@ -75,25 +75,68 @@ def edit_telegram_message(message_id, text):
         url = f"{API_URL}/editMessageText"
         payload = {"chat_id": CHAT_ID, "message_id": message_id, "text": text}
         resp = requests.post(url, json=payload, timeout=5)
-        if resp.status_code != 200:
-            print(f"❌ Ошибка редактирования: {resp.status_code}", flush=True)
-        return resp.status_code == 200
+        if resp.status_code == 200:
+            return True
+        else:
+            # Если ошибка 400 - пробуем отправить новое сообщение
+            if resp.status_code == 400:
+                print(f"⚠️ Не удалось отредактировать сообщение {message_id}, отправляем новое", flush=True)
+                return "resend"
+            else:
+                print(f"❌ Ошибка редактирования: {resp.status_code} - {resp.text}", flush=True)
+                return False
     except Exception as e:
         print(f"❌ Ошибка редактирования: {e}", flush=True)
         return False
+
+def safe_edit_or_resend(game_id, text):
+    """Безопасное редактирование или переотправка"""
+    if game_id not in messages:
+        # Если нет message_id - отправляем новое
+        msg_id = send_telegram_message(text)
+        if msg_id:
+            messages[game_id] = msg_id
+            game_cache[game_id] = {'text': text, 'time': datetime.now(MOSCOW_TZ)}
+            print(f"📤 Отправлено новое сообщение для игры {game_id}: {text}", flush=True)
+            return True
+        return False
+    
+    message_id = messages[game_id]
+    result = edit_telegram_message(message_id, text)
+    
+    if result == "resend":
+        # Если редактирование не удалось - удаляем старый ID и отправляем новое
+        del messages[game_id]
+        if game_id in game_cache:
+            del game_cache[game_id]
+        # Отправляем новое
+        msg_id = send_telegram_message(text)
+        if msg_id:
+            messages[game_id] = msg_id
+            game_cache[game_id] = {'text': text, 'time': datetime.now(MOSCOW_TZ)}
+            print(f"📤 Переотправлено сообщение для игры {game_id}: {text}", flush=True)
+            return True
+        return False
+    
+    if result:
+        game_cache[game_id] = {'text': text, 'time': datetime.now(MOSCOW_TZ)}
+        print(f"🔄 Обновлена игра {game_id}: {text}", flush=True)
+        return True
+    
+    return False
 
 # =====================================================================
 # ФУНКЦИИ ПАРСИНГА
 # =====================================================================
 def get_game_number():
-    """Номер игры от 1 до 1440 (каждые 2 минуты, старт в 03:00)"""
+    """Номер игры от 1 до 720 (каждые 2 минуты, старт в 03:00)"""
     now = datetime.now(MOSCOW_TZ)
     start = now.replace(hour=3, minute=0, second=0, microsecond=0)
     if now < start:
         start = start - timedelta(days=1)
     
     diff_minutes = (now - start).total_seconds() / 60
-    game_number = int(diff_minutes / 2) % 720 + 1  # Делим на 2, т.к. игры каждые 2 минуты
+    game_number = int(diff_minutes / 2) % 720 + 1
     return game_number
 
 def get_active_games():
@@ -183,44 +226,35 @@ def calculate_score(cards):
             score += 3
         elif cv == 11:    # Валет = 2
             score += 2
-        elif 6 <= cv <= 10:  # 6,7,8,9,10
+        elif 6 <= cv <= 10:
             score += cv
-        # Карты 2-5 не учитываются (в 21 классик они 0 очков)
     
     return score
 
 def is_game_finished(state, player_cards, dealer_cards, p_score, d_score):
     """Проверяет, завершена ли игра"""
     
-    # 1. Если пришёл статус завершения
     if state in ["4", "5"]:
         return True
     
-    # 2. Если у игрока перебор
     if p_score > 21:
         return True
     
-    # 3. Если у дилера перебор
     if d_score > 21:
         return True
     
-    # 4. Если у игрока 21
     if p_score == 21:
         return True
     
-    # 5. Если у дилера 21
     if d_score == 21:
         return True
     
-    # 6. Если у игрока 20+ очков — он не может брать карты
     if p_score >= 20:
         return True
     
-    # 7. Если у дилера 3 карты — игра завершена
     if dealer_cards and len(dealer_cards) >= 3:
         return True
     
-    # 8. Если у дилера 2 карты и 17+ очков, и у игрока 19+ очков
     if dealer_cards and len(dealer_cards) >= 2 and d_score >= 17 and p_score >= 19:
         return True
     
@@ -246,7 +280,6 @@ def build_message(game_num, player_cards, dealer_cards, p_score, d_score, state)
             return f"#N{game_num}. {p_score}({p_hand}) - ✅{d_score}({d_hand}) #T{total}"
         return f"#N{game_num}. {p_score}({p_hand}) - 🔰{d_score}({d_hand}) #T{total}"
     
-    # Игра ещё идёт
     if not dealer_cards:
         arrow = "◀️"
     elif len(dealer_cards) == 1:
@@ -321,14 +354,8 @@ def main():
                 
                 msg = build_message(game_number, player_cards, dealer_cards, p_score, d_score, state)
                 
-                if game_id in messages:
-                    edit_telegram_message(messages[game_id], msg)
-                    print(f"🔄 Обновлена игра {game_id}: {msg}", flush=True)
-                else:
-                    msg_id = send_telegram_message(msg)
-                    if msg_id:
-                        messages[game_id] = msg_id
-                        print(f"📤 Новая игра {game_id}: {msg}", flush=True)
+                # Используем безопасное редактирование
+                safe_edit_or_resend(game_id, msg)
                 
                 if is_game_finished(state, player_cards, dealer_cards, p_score, d_score):
                     processed_games.add(game_id)
@@ -339,6 +366,7 @@ def main():
             if len(processed_games) > 200:
                 processed_games.clear()
                 messages.clear()
+                game_cache.clear()
                 print("🗑️ Кэш обработанных игр очищен", flush=True)
             
             time.sleep(2)
