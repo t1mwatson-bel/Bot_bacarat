@@ -39,7 +39,7 @@ API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 messages = {}
 game_cache = {}
 processed_games = set()
-last_edit_time = {}  # Для ограничения частоты редактирования
+last_edit_time = {}
 
 SUITS_NAMES = {0: "♠️", 1: "♣️", 2: "♦️", 3: "♥️"}
 RANKS = {2: "2", 3: "3", 4: "4", 5: "5", 6: "6", 7: "7", 8: "8", 9: "9", 10: "10", 11: "J", 12: "Q", 13: "K", 14: "A"}
@@ -100,7 +100,6 @@ def can_edit(game_id):
 
 def safe_edit_or_resend(game_id, text):
     """Безопасное редактирование или переотправка"""
-    # Если игра уже есть в messages - редактируем
     if game_id in messages:
         if not can_edit(game_id):
             print(f"⏳ Игра {game_id}: ожидаем 7 секунд перед редактированием", flush=True)
@@ -110,29 +109,22 @@ def safe_edit_or_resend(game_id, text):
         result = edit_telegram_message(message_id, text)
         
         if result == "resend":
-            # Если редактирование не удалось - отправляем новое
             del messages[game_id]
-            if game_id in game_cache:
-                del game_cache[game_id]
             msg_id = send_telegram_message(text)
             if msg_id:
                 messages[game_id] = msg_id
-                game_cache[game_id] = {'text': text, 'time': datetime.now(MOSCOW_TZ)}
                 print(f"📤 Переотправлено: {text}", flush=True)
                 return True
             return False
         
         if result:
-            game_cache[game_id] = {'text': text, 'time': datetime.now(MOSCOW_TZ)}
             print(f"🔄 Обновлена: {text}", flush=True)
             return True
         return False
     
-    # Если игры нет в messages - отправляем новую
     msg_id = send_telegram_message(text)
     if msg_id:
         messages[game_id] = msg_id
-        game_cache[game_id] = {'text': text, 'time': datetime.now(MOSCOW_TZ)}
         print(f"📤 Отправлено: {text}", flush=True)
         return True
     return False
