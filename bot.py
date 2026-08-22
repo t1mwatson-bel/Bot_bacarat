@@ -26,6 +26,10 @@ API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 messages = {}
 game_cache = {}
 processed_games = set()
+game_numbers = {}  
+player_cards_history = {}  
+dealer_cards_history = {}  
+game_start_time = {}  
 
 SUITS_NAMES = {0: "♠️", 1: "♣️", 2: "♦️", 3: "♥️"}
 RANKS = {2: "2", 3: "3", 4: "4", 5: "5", 6: "6", 7: "7", 8: "8", 9: "9", 10: "10", 11: "J", 12: "Q", 13: "K", 14: "A"}
@@ -43,17 +47,17 @@ print("✅ Настройки загружены", flush=True)
 # ФУНКЦИИ
 # =====================================================================
 def get_game_number():
-    """Номер игры от 1 до 720 (каждую две минуты, старт в 03:00)"""
+    """Номер игры от 1 до 720 (каждые две минуты, старт в 03:00)"""
     now = datetime.now(MOSCOW_TZ)
     start = now.replace(hour=3, minute=0, second=0, microsecond=0)
     if now < start:
         start = start - timedelta(days=1)
     diff_minutes = (now - start).total_seconds() / 60
-    game_number = int(diff_minutes) % 720 + 1
-    return game_number
+    game_number = int(diff_minutes) / 2 % 720 + 1
+    return int(game_number)
 
 def get_active_games():
-    """Получает список всех активных игр 21 Classics через V3 API"""
+    """Получает список ВСЕХ игр 21 Classics (включая завершённые)"""
     try:
         url = "https://1xlite-36553.pro/service-api/main-live-feed/v3/games1x2?cfView=3&count=40&fcountry=1&gr=415&grMode=4&lng=ru&ref=7&selectedMs=1.146.2092323,2.146.2092323,10.146.2092323"
         print(f"🔍 Запрос к API V3...", flush=True)
@@ -74,22 +78,14 @@ def get_active_games():
             
             active_games = []
             for game in games:
-                # Проверяем, что это 21 Classics (liga.id = 2092323)
                 if game.get("liga", {}).get("id") == 2092323:
                     game_id = game.get("id")
                     if game_id and str(game_id) not in processed_games:
-                        # Проверяем, что игра живая (state 0-3)
-                        scores = game.get("scores", {})
-                        statistic = scores.get("statistic", {}).get("main", {})
-                        state = statistic.get("STATE", "0")
-                        
-                        if state in ["0", "1", "2", "3"]:
-                            active_games.append(game)
-                            print(f"✅ Найдена живая игра: {game_id} (state={state})", flush=True)
-                        else:
-                            print(f"⏭️ Игра {game_id} завершена (state={state})", flush=True)
+                        # Берём ВСЕ игры, даже завершённые
+                        active_games.append(game)
+                        print(f"✅ Найдена игра: {game_id}", flush=True)
             
-            print(f"📊 Активных игр (не обработанных): {len(active_games)}", flush=True)
+            print(f"📊 Игр (не обработанных): {len(active_games)}", flush=True)
             return active_games
         else:
             print(f"⚠️ Статус API: {response.status_code}", flush=True)
@@ -143,12 +139,11 @@ def calculate_score(cards):
             score += 2
         elif 6 <= cv <= 10:  # 6,7,8,9,10
             score += cv
-        # Карты 2-5 не учитываются (в 21 классик они 0 очков)
     
     return score
 
 def is_game_finished(state, player_cards, dealer_cards, p_score, d_score):
-    """Проверяет, завершена ли игра"""
+    """Проверяет, завершена ли игра (только по STATE и дилеру)"""
     if state in ["4", "5"]:
         return True
     
@@ -158,17 +153,13 @@ def is_game_finished(state, player_cards, dealer_cards, p_score, d_score):
     if p_score > 21 or d_score > 21:
         return True
     
-    # Если у игрока 20+ очков, он не может взять карту
-    if p_score >= 20:
-        return True
-    
-    # Дилер добирает только если у него 2+ карты и >= 17
+    # Дилер остановился (2+ карты и >= 17) — игра завершена
     if dealer_cards and len(dealer_cards) >= 2 and d_score >= 17:
         return True
     
     return False
 
-def build_message(game_num, player_cards, dealer_cards, p_score, d_score, state):
+def build_message(game_num, player_cards, dealer_cards, p_score, d_score, state, player_changed, dealer_changed):
     p_hand = format_cards(player_cards)
     d_hand = format_cards(dealer_cards)
     total = p_score + d_score if dealer_cards else p_score
@@ -188,27 +179,21 @@ def build_message(game_num, player_cards, dealer_cards, p_score, d_score, state)
             return f"#N{game_num}. {p_score}({p_hand}) - ✅{d_score}({d_hand}) #T{total}"
         return f"#N{game_num}. {p_score}({p_hand}) - 🔰{d_score}({d_hand}) #T{total}"
     
-    # Определяем, кто ходит в 21 Classics
-    if not dealer_cards:
-        # У дилера нет карт - игрок получил 2 карты
-        arrow = "◀️"  # Игрок может брать
-    elif len(dealer_cards) == 1:
-        # У дилера 1 карта - игрок все еще может взять
-        arrow = "◀️"  # Игрок может брать
+    # ЛАЙВ-ЛОГИКА: кто сейчас ходит
+    if player_changed:
+        arrow = "◀️"
+    elif dealer_changed:
+        arrow = "▶️"
     else:
-        # У дилера 2+ карт
-        if d_score < 17:
-            # Дилер обязан брать до 17
-            arrow = "▶️"  # Дилер берет
+        if not dealer_cards:
+            arrow = "◀️"
+        elif len(dealer_cards) == 1:
+            arrow = "◀️"
         else:
-            # Дилер набрал 17+ и остановился
-            # Проверяем, может ли игрок взять карту
-            if p_score <= 19:
-                # При 19 и меньше - может взять (минимальная карта 2 очка - валет)
-                arrow = "◀️"  # Игрок может брать
+            if d_score < 17:
+                arrow = "▶️"
             else:
-                # При 20+ - брать нельзя, перебор
-                arrow = "⏹️"  # Игрок не может взять (пас)
+                arrow = "⏹️"
     
     return f"#N{game_num}. {p_score}({p_hand}) {arrow} {d_score}({d_hand}) #T{total}"
 
@@ -235,10 +220,10 @@ def edit_message(message_id, text):
 # ОСНОВНОЙ ЦИКЛ
 # =====================================================================
 def main():
-    global processed_games
+    global processed_games, game_numbers, player_cards_history, dealer_cards_history
     
-    print("🔄 ПАРСЕР ЗАПУЩЕН (МНОГОПОТОЧНЫЙ)", flush=True)
-    print(f"🕐 Игры каждую минуту, старт в 03:00", flush=True)
+    print("🔄 ПАРСЕР ЗАПУЩЕН (ЛАЙВ-РЕЖИМ)", flush=True)
+    print(f"🕐 Игры каждые 2 минуты, старт в 03:00", flush=True)
     print("=" * 60, flush=True)
     
     while True:
@@ -260,7 +245,6 @@ def main():
                 if not data:
                     continue
                 
-                # Парсим данные игры
                 sc = data.get("Value", {}).get("SC", {})
                 
                 player_cards = []
@@ -284,12 +268,37 @@ def main():
                 if not player_cards:
                     continue
                 
-                game_number = get_game_number()
+                # Сохраняем номер игры при первом посте
+                if game_id not in game_numbers:
+                    game_numbers[game_id] = get_game_number()
+                game_number = game_numbers[game_id]
+                
+                # Отслеживаем изменения P1 и P2
+                player_changed = False
+                dealer_changed = False
+                
+                p1_str = json.dumps(player_cards)
+                p2_str = json.dumps(dealer_cards)
+                
+                if game_id in player_cards_history:
+                    if player_cards_history[game_id] != p1_str:
+                        player_changed = True
+                else:
+                    player_changed = True
+                
+                if game_id in dealer_cards_history:
+                    if dealer_cards_history[game_id] != p2_str:
+                        dealer_changed = True
+                else:
+                    dealer_changed = True
+                
+                player_cards_history[game_id] = p1_str
+                dealer_cards_history[game_id] = p2_str
                 
                 p_score = calculate_score(player_cards)
                 d_score = calculate_score(dealer_cards) if dealer_cards else 0
                 
-                msg = build_message(game_number, player_cards, dealer_cards, p_score, d_score, state)
+                msg = build_message(game_number, player_cards, dealer_cards, p_score, d_score, state, player_changed, dealer_changed)
                 
                 if game_id in messages:
                     edit_message(messages[game_id], msg)
@@ -300,16 +309,20 @@ def main():
                         messages[game_id] = msg_id
                         print(f"📤 Новая игра {game_id}: {msg}", flush=True)
                 
+                # Проверяем завершение
                 if is_game_finished(state, player_cards, dealer_cards, p_score, d_score):
                     processed_games.add(game_id)
                     print(f"🏁 Игра {game_id} завершена", flush=True)
                 
                 time.sleep(0.3)
             
-            # Очищаем кэш, если он слишком большой
+            # Очистка кэша
             if len(processed_games) > 200:
                 processed_games.clear()
-                print("🗑️ Кэш обработанных игр очищен", flush=True)
+                game_numbers.clear()
+                player_cards_history.clear()
+                dealer_cards_history.clear()
+                print("🗑️ Кэш очищен", flush=True)
             
             time.sleep(2)
             
