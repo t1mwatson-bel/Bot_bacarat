@@ -2,6 +2,7 @@ import requests
 import json
 import re
 import time
+import os  # Добавляем для работы с переменными окружения
 from datetime import datetime, timedelta
 import pytz
 import sys
@@ -15,10 +16,15 @@ print("🃏 ПАРСЕР 21 CLASSICS - V3 API (МНОГОПОТОЧНЫЙ)", flu
 print("=" * 60, flush=True)
 
 # =====================================================================
-# НАСТРОЙКИ
+# НАСТРОЙКИ - БЕРЁМ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ
 # =====================================================================
-BOT_TOKEN = "5482422004:AAEKX1vcjzGbCYFrRL1MqKj4VymTGYwN7-c"
-CHAT_ID = "-1003477065559"
+# Если переменные не заданы - используем значения по умолчанию (для локальной разработки)
+BOT_TOKEN = os.getenv('BOT_TOKEN', '5482422004:AAEKX1vcjzGbCYFrRL1MqKj4VymTGYwN7-c')
+CHAT_ID = os.getenv('CHAT_ID', '-1003477065559')
+
+# Дополнительные переменные для гибкости
+API_BASE_URL = os.getenv('API_BASE_URL', 'https://1xlite-65155.pro')
+SITE_DOMAIN = os.getenv('SITE_DOMAIN', '1xlite-65155.pro')
 
 MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 
@@ -30,14 +36,19 @@ processed_games = set()
 SUITS_NAMES = {0: "♠️", 1: "♣️", 2: "♦️", 3: "♥️"}
 RANKS = {2: "2", 3: "3", 4: "4", 5: "5", 6: "6", 7: "7", 8: "8", 9: "9", 10: "10", 11: "J", 12: "Q", 13: "K", 14: "A"}
 
+# Куки тоже можно вынести в переменные
+COOKIE_STRING = os.getenv('COOKIE_STRING', "platform_type=desktop; SESSION=34219176f69eace1b636911e2de9a15e; lng=ru; cookies_agree_type=3; tzo=3; is12h=0; auid=uaJbk2qIgo2M+6ofAxNqAg==; _ym_isad=2; mdd=1; _ga_7JGWL9SV66=GS2.1.s1787337341$o4$g1$t1787337359$j42$l0$h1608459194; window_width=150; referral_values=%7B%22type%22%3A%22reflinkid%22%2C%22val%22%3A%22s_50970m_355c_%22%2C%22additional%22%3A%7B%22name_tag%22%3A%22tag%22%7D%7D; fatman_uuid=45f69ff0-ecb1-67d4-3ff2-3a45baafc739; che_g=777dc1b9-efbf-4728-947a-4a2992ef6da5; sh.session.id=684214c4-f09e-42da-9c1a-ea61b9aca91b; _ym_uid=1786989905737338437; _ym_d=1786989905; _ga=GA1.1.547872848.1786989906")
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Accept": "application/json, text/plain, */*",
-    "Referer": "https://1xlite-36553.pro/ru/live/twentyone/2092323-21-classics",
-    "Cookie": "platform_type=desktop; SESSION=34219176f69eace1b636911e2de9a15e; lng=ru; cookies_agree_type=3; tzo=3; is12h=0; auid=uaJbk2qIgo2M+6ofAxNqAg==; _ym_isad=2; mdd=1; _ga_7JGWL9SV66=GS2.1.s1787337341$o4$g1$t1787337359$j42$l0$h1608459194; window_width=150; referral_values=%7B%22type%22%3A%22reflinkid%22%2C%22val%22%3A%22s_50970m_355c_%22%2C%22additional%22%3A%7B%22name_tag%22%3A%22tag%22%7D%7D; fatman_uuid=45f69ff0-ecb1-67d4-3ff2-3a45baafc739; che_g=777dc1b9-efbf-4728-947a-4a2992ef6da5; sh.session.id=684214c4-f09e-42da-9c1a-ea61b9aca91b; _ym_uid=1786989905737338437; _ym_d=1786989905; _ga=GA1.1.547872848.1786989906"
+    "Referer": f"https://{SITE_DOMAIN}/ru/live/twentyone/2092323-21-classics",
+    "Cookie": COOKIE_STRING
 }
 
 print("✅ Настройки загружены", flush=True)
+print(f"📱 Bot Token: {'*' * len(BOT_TOKEN[:10])}...", flush=True)
+print(f"📢 Chat ID: {CHAT_ID}", flush=True)
 
 # =====================================================================
 # ФУНКЦИИ
@@ -55,7 +66,7 @@ def get_game_number():
 def get_active_games():
     """Получает список всех активных игр 21 Classics через V3 API"""
     try:
-        url = "https://1xlite-36553.pro/service-api/main-live-feed/v3/games1x2?cfView=3&count=40&fcountry=1&gr=415&grMode=4&lng=ru&ref=7&selectedMs=1.146.2092323,2.146.2092323,10.146.2092323"
+        url = f"https://{SITE_DOMAIN}/service-api/main-live-feed/v3/games1x2?cfView=3&count=40&fcountry=1&gr=415&grMode=4&lng=ru&ref=7&selectedMs=1.146.2092323,2.146.2092323,10.146.2092323"
         print(f"🔍 Запрос к API V3...", flush=True)
         response = requests.get(url, headers=HEADERS, timeout=10)
         
@@ -74,11 +85,9 @@ def get_active_games():
             
             active_games = []
             for game in games:
-                # Проверяем, что это 21 Classics (liga.id = 2092323)
                 if game.get("liga", {}).get("id") == 2092323:
                     game_id = game.get("id")
                     if game_id and str(game_id) not in processed_games:
-                        # Проверяем, что игра живая (state 0-3)
                         scores = game.get("scores", {})
                         statistic = scores.get("statistic", {}).get("main", {})
                         state = statistic.get("STATE", "0")
@@ -100,7 +109,7 @@ def get_active_games():
 
 def get_game_data(game_id):
     """Получает данные конкретной игры 21 Classics"""
-    url = f"https://1xlite-36553.pro/service-api/LiveFeed/GetGameZip?id={game_id}&isSubGames=true&GroupEvents=true&countevents=250&grMode=4&partner=7&topGroups=&country=190&marketType=1&isNewBuilder=true"
+    url = f"https://{SITE_DOMAIN}/service-api/LiveFeed/GetGameZip?id={game_id}&isSubGames=true&GroupEvents=true&countevents=250&grMode=4&partner=7&topGroups=&country=190&marketType=1&isNewBuilder=true"
     try:
         response = requests.get(url, headers=HEADERS, timeout=5)
         if response.status_code == 200:
@@ -158,11 +167,9 @@ def is_game_finished(state, player_cards, dealer_cards, p_score, d_score):
     if p_score > 21 or d_score > 21:
         return True
     
-    # Если у игрока 20+ очков, он не может взять карту
     if p_score >= 20:
         return True
     
-    # Дилер добирает только если у него 2+ карты и >= 17
     if dealer_cards and len(dealer_cards) >= 2 and d_score >= 17:
         return True
     
@@ -188,27 +195,18 @@ def build_message(game_num, player_cards, dealer_cards, p_score, d_score, state)
             return f"#N{game_num}. {p_score}({p_hand}) - ✅{d_score}({d_hand}) #T{total}"
         return f"#N{game_num}. {p_score}({p_hand}) - 🔰{d_score}({d_hand}) #T{total}"
     
-    # Определяем, кто ходит в 21 Classics
     if not dealer_cards:
-        # У дилера нет карт - игрок получил 2 карты
-        arrow = "◀️"  # Игрок может брать
+        arrow = "◀️"
     elif len(dealer_cards) == 1:
-        # У дилера 1 карта - игрок все еще может взять
-        arrow = "◀️"  # Игрок может брать
+        arrow = "◀️"
     else:
-        # У дилера 2+ карт
         if d_score < 17:
-            # Дилер обязан брать до 17
-            arrow = "▶️"  # Дилер берет
+            arrow = "▶️"
         else:
-            # Дилер набрал 17+ и остановился
-            # Проверяем, может ли игрок взять карту
             if p_score <= 19:
-                # При 19 и меньше - может взять (минимальная карта 2 очка - валет)
-                arrow = "◀️"  # Игрок может брать
+                arrow = "◀️"
             else:
-                # При 20+ - брать нельзя, перебор
-                arrow = "⏹️"  # Игрок не может взять (пас)
+                arrow = "⏹️"
     
     return f"#N{game_num}. {p_score}({p_hand}) {arrow} {d_score}({d_hand}) #T{total}"
 
@@ -260,7 +258,6 @@ def main():
                 if not data:
                     continue
                 
-                # Парсим данные игры
                 sc = data.get("Value", {}).get("SC", {})
                 
                 player_cards = []
@@ -306,7 +303,6 @@ def main():
                 
                 time.sleep(0.3)
             
-            # Очищаем кэш, если он слишком большой
             if len(processed_games) > 200:
                 processed_games.clear()
                 print("🗑️ Кэш обработанных игр очищен", flush=True)
