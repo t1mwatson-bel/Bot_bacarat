@@ -1,23 +1,24 @@
+import os
+import sys
 import requests
 import json
 import re
 import time
 from datetime import datetime, timedelta
 import pytz
-import sys
 
 # =====================================================================
-# ПРИНУДИТЕЛЬНЫЙ ВЫВОД ЛОГОВ
+# ПЕРЕМЕННЫЕ ИЗ ОКРУЖЕНИЯ
 # =====================================================================
-sys.stdout.flush()
-print("=" * 60, flush=True)
-print("🃏 ПАРСЕР 21 CLASSICS - V3 API (МНОГОПОТОЧНЫЙ)", flush=True)
-print("=" * 60, flush=True)
-
-# =====================================================================
-# НАСТРОЙКИ
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 CHAT_ID = os.getenv('CHAT_ID')
+
+if not BOT_TOKEN or not CHAT_ID:
+    print("❌ Ошибка: BOT_TOKEN или CHAT_ID не заданы в переменных окружения!", flush=True)
+    sys.exit(1)
+
+print(f"✅ BOT_TOKEN: {BOT_TOKEN[:5]}...", flush=True)
+print(f"✅ CHAT_ID: {CHAT_ID}", flush=True)
 
 MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 
