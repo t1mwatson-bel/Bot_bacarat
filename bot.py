@@ -2,7 +2,7 @@ import requests
 import json
 import re
 import time
-import os  # <-- ДОБАВИЛ ДЛЯ ПЕРЕМЕННЫХ
+import os
 from datetime import datetime, timedelta
 import pytz
 import sys
@@ -50,16 +50,21 @@ HEADERS = {
 print("=" * 60, flush=True)
 
 # =====================================================================
-# ФУНКЦИИ (без изменений)
+# ФУНКЦИИ
 # =====================================================================
 def get_game_number():
-    """Номер игры от 1 до 1440 (каждую минуту, старт в 03:00)"""
+    """Номер игры от 1 до 720 (каждые 2 минуты, старт в 03:00)"""
     now = datetime.now(MOSCOW_TZ)
     start = now.replace(hour=3, minute=0, second=0, microsecond=0)
     if now < start:
         start = start - timedelta(days=1)
+    
+    # Разница в минутах
     diff_minutes = (now - start).total_seconds() / 60
-    game_number = int(diff_minutes) % 1440 + 1
+    
+    # Делим на 2 (игры каждые 2 минуты)
+    game_number = int(diff_minutes / 2) % 720 + 1
+    
     return game_number
 
 def get_active_games():
@@ -235,7 +240,7 @@ def main():
     global processed_games
     
     print("🔄 ПАРСЕР ЗАПУЩЕН (МНОГОПОТОЧНЫЙ)", flush=True)
-    print(f"🕐 Игры каждую минуту, старт в 03:00", flush=True)
+    print("🕐 Игры каждые 2 минуты, старт в 03:00", flush=True)
     print("=" * 60, flush=True)
     
     while True:
