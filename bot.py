@@ -16,9 +16,8 @@ print("=" * 60, flush=True)
 
 # =====================================================================
 # НАСТРОЙКИ
-# =====================================================================
-BOT_TOKEN = "5482422004:AAEKX1vcjzGbCYFrRL1MqKj4VymTGYwN7-c"
-CHAT_ID = "-1003477065559"
+BOT_TOKEN = os.getenv('BOT_TOKEN')
+CHAT_ID = os.getenv('CHAT_ID')
 
 MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 
@@ -43,13 +42,13 @@ print("✅ Настройки загружены", flush=True)
 # ФУНКЦИИ
 # =====================================================================
 def get_game_number():
-    """Номер игры от 1 до 1440 (каждую минуту, старт в 03:00)"""
+    """Номер игры от 1 до 7200 (каждую две минуты, старт в 03:00)"""
     now = datetime.now(MOSCOW_TZ)
     start = now.replace(hour=3, minute=0, second=0, microsecond=0)
     if now < start:
         start = start - timedelta(days=1)
     diff_minutes = (now - start).total_seconds() / 60
-    game_number = int(diff_minutes) % 1440 + 1
+    game_number = int(diff_minutes) % 720 + 1
     return game_number
 
 def get_active_games():
