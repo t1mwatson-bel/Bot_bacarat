@@ -2,7 +2,7 @@ import requests
 import json
 import re
 import time
-import os  # Добавляем для работы с переменными окружения
+import os
 from datetime import datetime, timedelta
 import pytz
 import sys
@@ -16,15 +16,24 @@ print("🃏 ПАРСЕР 21 CLASSICS - V3 API (МНОГОПОТОЧНЫЙ)", flu
 print("=" * 60, flush=True)
 
 # =====================================================================
-# НАСТРОЙКИ - БЕРЁМ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ
+# ЗАГРУЗКА ПЕРЕМЕННЫХ ИЗ ОКРУЖЕНИЯ
 # =====================================================================
-# Если переменные не заданы - используем значения по умолчанию (для локальной разработки)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    print("✅ .env загружен", flush=True)
+except:
+    print("⚠️ .env не найден, используем переменные из кода", flush=True)
+
+# ЕДИНСТВЕННОЕ МЕСТО ОПРЕДЕЛЕНИЯ ПЕРЕМЕННЫХ!
 BOT_TOKEN = os.getenv('BOT_TOKEN', '5482422004:AAEKX1vcjzGbCYFrRL1MqKj4VymTGYwN7-c')
 CHAT_ID = os.getenv('CHAT_ID', '-1003477065559')
+SITE_DOMAIN = os.getenv('SITE_DOMAIN', '1xlite-36553.pro')  # НОВЫЙ ДОМЕН!
 
-# Дополнительные переменные для гибкости
-API_BASE_URL = os.getenv('API_BASE_URL', 'https://1xlite-65155.pro')
-SITE_DOMAIN = os.getenv('SITE_DOMAIN', '1xlite-65155.pro')
+print(f"✅ BOT_TOKEN загружен: {BOT_TOKEN[:5]}...{BOT_TOKEN[-5:]}", flush=True)
+print(f"✅ CHAT_ID загружен: {CHAT_ID}", flush=True)
+print(f"✅ SITE_DOMAIN загружен: {SITE_DOMAIN}", flush=True)
+print("=" * 60, flush=True)
 
 MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 
@@ -36,7 +45,6 @@ processed_games = set()
 SUITS_NAMES = {0: "♠️", 1: "♣️", 2: "♦️", 3: "♥️"}
 RANKS = {2: "2", 3: "3", 4: "4", 5: "5", 6: "6", 7: "7", 8: "8", 9: "9", 10: "10", 11: "J", 12: "Q", 13: "K", 14: "A"}
 
-# Куки тоже можно вынести в переменные
 COOKIE_STRING = os.getenv('COOKIE_STRING', "platform_type=desktop; SESSION=34219176f69eace1b636911e2de9a15e; lng=ru; cookies_agree_type=3; tzo=3; is12h=0; auid=uaJbk2qIgo2M+6ofAxNqAg==; _ym_isad=2; mdd=1; _ga_7JGWL9SV66=GS2.1.s1787337341$o4$g1$t1787337359$j42$l0$h1608459194; window_width=150; referral_values=%7B%22type%22%3A%22reflinkid%22%2C%22val%22%3A%22s_50970m_355c_%22%2C%22additional%22%3A%7B%22name_tag%22%3A%22tag%22%7D%7D; fatman_uuid=45f69ff0-ecb1-67d4-3ff2-3a45baafc739; che_g=777dc1b9-efbf-4728-947a-4a2992ef6da5; sh.session.id=684214c4-f09e-42da-9c1a-ea61b9aca91b; _ym_uid=1786989905737338437; _ym_d=1786989905; _ga=GA1.1.547872848.1786989906")
 
 HEADERS = {
@@ -45,10 +53,6 @@ HEADERS = {
     "Referer": f"https://{SITE_DOMAIN}/ru/live/twentyone/2092323-21-classics",
     "Cookie": COOKIE_STRING
 }
-
-print("✅ Настройки загружены", flush=True)
-print(f"📱 Bot Token: {'*' * len(BOT_TOKEN[:10])}...", flush=True)
-print(f"📢 Chat ID: {CHAT_ID}", flush=True)
 
 # =====================================================================
 # ФУНКЦИИ
