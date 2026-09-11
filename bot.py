@@ -668,10 +668,10 @@ def get_new_prediction(game):
         Масть не используется.
     """
 
-    player = game.get("player_cards", [])
+        player = game.get("player_cards", [])
     dealer = game.get("dealer_cards", [])
 
-    if not player:
+    if len(player) < 1 or len(dealer) < 1:
         return None
 
     first_player_rank = normalize_rank(
