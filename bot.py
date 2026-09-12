@@ -423,20 +423,9 @@ def get_rank_prediction(game):
         - первая десятка в общем порядке карт,
           НО НЕ первая карта игрока.
 
-    Почему так:
-        - если первая карта игрока — 10,
-          она является ЦЕЛЬЮ и НЕ считается триггером;
-        - триггер — следующая десятка в игре;
-        - если после первой карты игрока десяток нет — триггера нет.
-
-    Если первая карта игрока — НЕ 10:
-        - триггер — первая десятка в игре.
-
     Отсев по позиции триггера:
         - если триггерная десятка стоит ВТОРОЙ картой (ten_index == 1)
           и REJECT_TEN_SECOND_CARD = True → прогноз отсеивается.
-        - такие сигналы слабые: уходят в задержку на 4-м догоне
-          или вообще не заходят.
 
     Отсев по тузу:
         - смотрим промежуток между первой картой игрока
@@ -460,6 +449,84 @@ def get_rank_prediction(game):
 
     if not player:
         return None
+
+    # Общий порядок карт: сначала игрок, потом дилер.
+    all_cards = list(player) + list(dealer)
+
+    # Целевой ранг = ранг первой карты игрока.
+    target_rank = normalize_rank(player[0].get("rank"))
+
+    if not target_rank:
+        return None
+
+    # Ищем первую десятку, НАЧИНАЯ СО ВТОРОЙ ПОЗИЦИИ.
+    ten_index = None
+    for idx in range(1, len(all_cards)):
+        if normalize_rank(all_cards[idx].get("rank")) == "10":
+            ten_index = idx
+            break
+
+    if ten_index is None:
+        return None
+
+    # Отсев: триггер второй картой.
+    if REJECT_TEN_SECOND_CARD and ten_index == 1:
+        print(
+            f"🚫 #N{game['game_number']}: "
+            f"триггер второй картой — отсев",
+            flush=True,
+        )
+        return None
+
+    # Промежуток между первой картой игрока и триггерной десяткой.
+    middle_cards = all_cards[1:ten_index]
+
+    # Отсев: туз в промежутке.
+    for card in middle_cards:
+        if normalize_rank(card.get("rank")) == "A":
+            print(
+                f"🚫 #N{game['game_number']}: "
+                f"туз в промежутке до десятки — отсев",
+                flush=True,
+            )
+            return None
+
+    # Отсев: туз после триггерной десятки (если включён флаг).
+    if REJECT_ACE_AFTER_TEN:
+        after_ten = all_cards[ten_index + 1:]
+
+        for card in after_ten:
+            if normalize_rank(card.get("rank")) == "A":
+                print(
+                    f"🚫 #N{game['game_number']}: "
+                    f"туз после десятки — отсев",
+                    flush=True,
+                )
+                return None
+
+    # Целевая игра.
+    target_offset = ten_index + 1
+    target_number = add_game_offset(game["game_number"], target_offset)
+
+    return {
+        "algorithm": "триггерная 10 → ранг",
+        "trigger_number": game["game_number"],
+        "trigger_game_id": game.get("game_id"),
+        "target_number": target_number,
+        "predicted_rank": target_rank,
+        "trigger_player": [card_to_text(c) for c in player],
+        "trigger_dealer": [card_to_text(c) for c in dealer],
+        "trigger_player_score": game["player_score"],
+        "trigger_dealer_score": game["dealer_score"],
+        "ten_index": ten_index,
+        "target_offset": target_offset,
+        "status": "pending",
+        "created_at": datetime.now(MOSCOW_TZ).isoformat(),
+        "result_game": None,
+        "found_card": None,
+        "dogon": None,
+        "message_id": None,
+    }
 
 
 # =====================================================================
