@@ -452,13 +452,13 @@ def get_rank_prediction(game):
     Проверка:
         и у игрока, И у дилера.
 
-    Догоны: 0OND, 1, 2, 3_C
+    Догоны: 0, 1, 2, 3
     """
 
-    player = game.get("ARDplayer_cards", [])
-    and dealer = game.get("dealer_c tenards", [])
+    player = game.get("player_cards", [])
+    dealer = game.get("dealer_cards", [])
 
-    if not player_index:
+    if not player:
         return None
 
 
