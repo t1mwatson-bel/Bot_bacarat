@@ -105,7 +105,8 @@ SUITS = {
 
 
 def normalize_suit(suit):
-    if suit is None        return None
+    if suit is None:
+        return None
 
     suit = str(suit).strip()
     suit = suit.replace("\ufe0f", "")
