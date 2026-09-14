@@ -6,7 +6,7 @@ import time
 import requests
 import pytz
 
-from datetime import datetime
+from datetime import datetime, time as dtime
 
 
 # =====================================================================
@@ -55,6 +55,47 @@ FINALIZE_WAIT_SECONDS = 30
 # Догоны: 0, 1, 2, 3 — то есть целевая + 3 следующих.
 DOGON_GAMES = 3
 
+# =====================================================================
+# РАСПИСАНИЕ СНА
+# =====================================================================
+
+SLEEP_HOUR = 23
+SLEEP_MINUTE = 59
+
+WAKE_HOUR = 9
+WAKE_MINUTE = 0
+
+
+def is_sleep_time(now=None):
+    """
+    Проверяет, находится ли текущее время в "режиме сна".
+
+    Сон: с 23:59 до 09:00 (по Москве).
+    """
+
+    if now is None:
+        now = datetime.now(MOSCOW_TZ)
+
+    current = now.time()
+
+    sleep_start = dtime(SLEEP_HOUR, SLEEP_MINUTE)
+    wake_start = dtime(WAKE_HOUR, WAKE_MINUTE)
+
+    if sleep_start <= current or current < wake_start:
+        return True
+
+    return False
+
+
+def has_pending_predictions():
+    """Есть ли открытые (pending) прогнозы."""
+
+    for p in predictions:
+        if p.get("status") == "pending":
+            return True
+
+    return False
+
 
 # =====================================================================
 # TELEGRAM
@@ -84,6 +125,8 @@ pending_games = {}
 processed_triggers = set()
 predictions = []
 telegram_offset = 0
+
+sleeping = False
 
 
 # =====================================================================
@@ -240,6 +283,9 @@ def parse_game_message(text):
 
     is_draw = bool(re.search(r"#X\b", text))
 
+    # #O — маркер "очко" (21). Такие игры не идут в триггер.
+    is_ochko = bool(re.search(r"#O\b", text))
+
     return {
         "game_number": game_number,
         "game_id": game_id,
@@ -251,6 +297,7 @@ def parse_game_message(text):
         "dealer_score": dealer_score,
 
         "is_draw": is_draw,
+        "is_ochko": is_ochko,
 
         "raw_text": text,
     }
@@ -272,6 +319,9 @@ def log_game(game):
 
     if game.get("is_draw"):
         print("🔰 #X — НИЧЬЯ", flush=True)
+
+    if game.get("is_ochko"):
+        print("⭕ #O — ОЧКО (21), пропускаем триггер", flush=True)
 
     print("────────────────────────────────────", flush=True)
 
@@ -396,27 +446,26 @@ def add_game_offset(number, offset):
 
 
 # =====================================================================
-# ALGORITHM: ПОСЛЕДНЯЯ 10 → ДИЛЕР БЕЗ КАРТ
+# ALGORITHM: ПОСЛЕДНЯЯ 10 → МАСТЬ ДИЛЕРА
 # =====================================================================
 
 def get_last_card_prediction(game):
     """
-    Алгоритм "Последняя 10 → дилер без карт".
+    Алгоритм "Последняя 10 → масть дилера".
 
-    Триггер:
+    Триггер (тот же, что и для игрока):
         - карты только у игрока
         - у дилера 0 карт ()
         - последняя карта игрока — 10
         - есть знак ✅
+        - НЕТ знака #O (очко / 21 очко у игрока)
 
     Целевая игра (догон 0):
         game_number + количество карт игрока
 
     Прогноз:
-        у дилера в целевой игре будет 0 карт.
-
-    Проверка:
-        смотрим ТОЛЬКО на дилера — пустой ли у него список карт.
+        МАСТЬ последней десятки игрока.
+        Но проверяем её У ДИЛЕРА в целевой игре.
 
     Догоны: 0, 1, 2, 3
     """
@@ -430,6 +479,13 @@ def get_last_card_prediction(game):
     if dealer:
         return None
 
+    if game.get("is_ochko"):
+        print(
+            f"⭕ #N{game['game_number']}: #O (очко) — пропуск триггера",
+            flush=True,
+        )
+        return None
+
     last_card = player[-1]
     last_rank = normalize_rank(last_card.get("rank"))
 
@@ -439,15 +495,20 @@ def get_last_card_prediction(game):
     if "✅" not in game.get("raw_text", ""):
         return None
 
+    suit = normalize_suit(last_card.get("suit"))
+
+    if not suit:
+        return None
+
     target_offset = len(player)
     target_number = add_game_offset(game["game_number"], target_offset)
 
     return {
-        "algorithm": "последняя 10 → дилер без карт",
+        "algorithm": "последняя 10 → масть дилера",
         "trigger_number": game["game_number"],
         "trigger_game_id": game.get("game_id"),
         "target_number": target_number,
-        "prediction": "dealer_empty",
+        "predicted_suit": suit,
         "trigger_player": [card_to_text(c) for c in player],
         "trigger_dealer": [card_to_text(c) for c in dealer],
         "trigger_player_score": game["player_score"],
@@ -476,9 +537,10 @@ def get_algorithm_predictions(game):
 # =====================================================================
 
 def make_prediction_message(prediction):
+    suit = prediction["predicted_suit"]
     target = prediction["target_number"]
 
-    return f"🎯 Игра: <b>#N{target}</b> — дилер 0 карт"
+    return f"🎯 Игра: <b>#N{target}</b> {suit} (дилер)"
 
 
 # =====================================================================
@@ -525,10 +587,10 @@ def create_predictions(game):
         save_predictions()
 
         print("", flush=True)
-        print("🔮 ПРОГНОЗ СОЗДАН", flush=True)
+        print("🔮 ПРОГНОЗ СОЗДАН (дилер)", flush=True)
         print(f"🧠 Алгоритм: {algorithm}", flush=True)
         print(f"🎯 Цель: #N{target_number}", flush=True)
-        print(f"🃏 Прогноз: дилер 0 карт", flush=True)
+        print(f"🃏 Масть: {prediction['predicted_suit']} (дилер)", flush=True)
         print(f"📌 Триггер: #N{game_number}", flush=True)
 
 
@@ -537,21 +599,24 @@ def create_prediction(game):
 
 
 # =====================================================================
-# CHECK DEALER EMPTY
+# CHECK DEALER SUIT
 # =====================================================================
 
-def check_prediction_dealer_empty(game):
+def check_prediction_suit(game, predicted_suit):
     """
-    Проверяем ТОЛЬКО дилера.
-    У дилера должен быть пустой список карт.
+    Проверяем ТОЛЬКО карты дилера.
+    Игрок не участвует.
 
-    Возвращает "dealer_empty" если зашло, иначе None.
+    Ищем любую карту дилера с нужной мастью.
     """
 
     dealer_cards = game.get("dealer_cards", [])
 
-    if not dealer_cards:
-        return "dealer_empty"
+    for card in dealer_cards:
+        suit = normalize_suit(card.get("suit"))
+
+        if suit == predicted_suit:
+            return card_to_text(card)
 
     return None
 
@@ -561,10 +626,11 @@ def check_prediction_dealer_empty(game):
 # =====================================================================
 
 def make_result_message(prediction, result):
+    suit = prediction["predicted_suit"]
     target = prediction["target_number"]
     mark = "✅" if result == "win" else "❌"
 
-    return f"🎯 Игра: <b>#N{target}</b> — дилер 0 карт{mark}"
+    return f"🎯 Игра: <b>#N{target}</b> {suit} (дилер){mark}"
 
 
 # =====================================================================
@@ -577,7 +643,7 @@ def check_predictions():
     целевая игра, затем догоны 1, 2, 3.
 
     Минус — только если все 4 игры реально появились,
-    и ни в одной у дилера не было 0 карт.
+    и ни в одной у дилера не было нужной масти.
     """
 
     changed = False
@@ -589,6 +655,10 @@ def check_predictions():
 
         target = prediction.get("target_number")
         if not target:
+            continue
+
+        predicted_suit = prediction.get("predicted_suit")
+        if not predicted_suit:
             continue
 
         all_games_checked = True
@@ -608,13 +678,13 @@ def check_predictions():
                 )
                 break
 
-            # Игра есть — проверяем дилера.
-            found = check_prediction_dealer_empty(game)
+            # Игра есть — проверяем масть у дилера.
+            found_card = check_prediction_suit(game, predicted_suit)
 
-            if found:
+            if found_card:
                 prediction["status"] = "win"
                 prediction["result_game"] = game_number
-                prediction["found_card"] = found
+                prediction["found_card"] = found_card
                 prediction["dogon"] = dogon
 
                 telegram_edit(
@@ -625,8 +695,9 @@ def check_predictions():
                 print("", flush=True)
                 print(f"✅ PLUS #N{target}", flush=True)
                 print(
-                    f"🎯 Дилер 0 карт "
-                    f"в #N{game_number}",
+                    f"🎯 Масть {predicted_suit} "
+                    f"найдена у дилера в #N{game_number} "
+                    f"({found_card})",
                     flush=True,
                 )
                 print(f"🔄 Догон: {dogon}", flush=True)
@@ -635,15 +706,17 @@ def check_predictions():
                 all_games_checked = False
                 break
 
-            # Дилер взял карты — переходим к следующей игре.
+            # Масти нет — переходим к следующей игре.
             if game.get("is_draw"):
                 print(
-                    f"🔰 #N{game_number} — #X, дилер взял карты → дальше",
+                    f"🔰 #N{game_number} — #X, "
+                    f"у дилера масти нет → дальше",
                     flush=True,
                 )
             else:
                 print(
-                    f"🔍 #N{game_number} — дилер взял карты → дальше",
+                    f"🔍 #N{game_number} — "
+                    f"у дилера масти нет → дальше",
                     flush=True,
                 )
 
@@ -651,7 +724,7 @@ def check_predictions():
         if not all_games_checked:
             continue
 
-        # Все игры проверены, дилер везде брал карты — минус.
+        # Все игры проверены, масти нигде не было — минус.
         prediction["status"] = "lose"
         prediction["result_game"] = add_game_offset(target, DOGON_GAMES)
         prediction["dogon"] = DOGON_GAMES
@@ -707,6 +780,14 @@ def finalize_pending_games():
 
         games_cache[game_number] = game
         log_game(game)
+
+        if sleeping:
+            print(
+                f"😴 #N{game_number}: бот спит — прогноз не создаём",
+                flush=True,
+            )
+            continue
+
         create_prediction(game)
 
 
@@ -815,6 +896,42 @@ def process_telegram_updates(offset):
 
 
 # =====================================================================
+# SLEEP / WAKE LOGIC
+# =====================================================================
+
+def update_sleep_state():
+    global sleeping
+
+    now = datetime.now(MOSCOW_TZ)
+
+    sleep_now = is_sleep_time(now)
+
+    if sleep_now:
+        if not sleeping:
+            if has_pending_predictions():
+                print(
+                    "😴 Время сна. Ждём закрытия открытых прогнозов...",
+                    flush=True,
+                )
+            else:
+                sleeping = True
+                print(
+                    "😴 Время сна. Открытых прогнозов нет. "
+                    "Новые не создаём до 09:00.",
+                    flush=True,
+                )
+        elif has_pending_predictions():
+            sleeping = False
+    else:
+        if sleeping:
+            sleeping = False
+            print(
+                "☀️ 09:00 — бот проснулся. Снова создаём прогнозы.",
+                flush=True,
+            )
+
+
+# =====================================================================
 # CLEANUP
 # =====================================================================
 
@@ -847,20 +964,29 @@ def main():
 
     print("", flush=True)
     print("==================================================", flush=True)
-    print("🚀 CYBER 21 — TELEGRAM STATS FORECAST", flush=True)
+    print("🚀 CYBER 21 — DEALER SUIT FORECAST", flush=True)
     print("==================================================", flush=True)
     print("📡 Игры: CHANNEL_STATS", flush=True)
     print(f"⏳ Финализация: {FINALIZE_WAIT_SECONDS} сек", flush=True)
     print(
-        "🧠 Алгоритм: последняя 10 → дилер без карт "
+        "🧠 Алгоритм: последняя 10 → масть ДИЛЕРА "
         "(карты только у игрока, у дилера 0 карт, есть ✅)",
+        flush=True,
+    )
+    print(
+        "⭕ Фильтр #O: игры с очком (21) — пропуск триггера",
+        flush=True,
+    )
+    print(
+        f"😴 Сон: с {SLEEP_HOUR:02d}:{SLEEP_MINUTE:02d} "
+        f"до {WAKE_HOUR:02d}:{WAKE_MINUTE:02d}",
         flush=True,
     )
     print(
         f"🔄 Догонов: {DOGON_GAMES} (0, 1, 2, ..., {DOGON_GAMES})",
         flush=True,
     )
-    print("🎯 Прогноз: дилер 0 карт, проверка только у дилера", flush=True)
+    print("🎯 Прогноз: масть, проверка ТОЛЬКО у дилера", flush=True)
     print("==================================================", flush=True)
 
     load_predictions()
@@ -872,6 +998,8 @@ def main():
 
     while True:
         try:
+            update_sleep_state()
+
             telegram_offset = process_telegram_updates(telegram_offset)
             finalize_pending_games()
             check_predictions()
