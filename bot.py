@@ -1836,8 +1836,6 @@ def create_predictions_for_game(
     if not matches:
         return
 
-    print("", flush=True)
-
     print(
         f"🧠 НАЙДЕНО ПАТТЕРНОВ: "
         f"#N{trigger_number} → "
@@ -1845,156 +1843,197 @@ def create_predictions_for_game(
         flush=True,
     )
 
-    grouped = {}
+    # ================================================================
+    # ИЗ ВСЕХ СОВПАДЕНИЙ ВЫБИРАЕМ ТОЛЬКО ОДИН ЛУЧШИЙ ПАТТЕРН
+    #
+    # Приоритет:
+    # 1. rate          — точность
+    # 2. occurrences   — количество появлений
+    # 3. длина паттерна
+    # ================================================================
+
+    best_pattern = None
+    best_key = None
 
     for pattern in matches:
 
-        suit = pattern[
-            "suit"
-        ]
-
-        current = grouped.get(
-            suit
+        length = pattern_length(
+            pattern
         )
 
-        if current is None:
-
-            grouped[suit] = pattern
-            continue
-
-        current_key = (
-            pattern_length(
-                current
-            ),
-            current.get(
-                "occurrences",
-                0
-            ),
-        )
-
-        new_key = (
-            pattern_length(
-                pattern
-            ),
-            pattern.get(
-                "occurrences",
-                0
-            ),
-        )
-
-        if new_key > current_key:
-
-            grouped[suit] = pattern
-
-    for suit, pattern in (
-        grouped.items()
-    ):
-
-        prediction = (
-            create_pattern_prediction(
-                trigger_number,
-                pattern
+        try:
+            rate = float(
+                pattern.get(
+                    "rate",
+                    0
+                ) or 0
             )
-        )
+        except Exception:
+            rate = 0
 
-        if not prediction:
-            continue
+        try:
+            occurrences = int(
+                pattern.get(
+                    "occurrences",
+                    0
+                ) or 0
+            )
+        except Exception:
+            occurrences = 0
 
-        target_number = prediction[
-            "target_number"
-        ]
-
-        prediction_key = (
-            trigger_number,
-            target_number,
-            suit,
+        key = (
+            rate,
+            occurrences,
+            length,
         )
 
         if (
-            prediction_key
-            in processed_prediction_keys
+            best_key is None
+            or key > best_key
+        ):
+
+            best_key = key
+            best_pattern = pattern
+
+    if not best_pattern:
+        return
+
+    suit = normalize_suit(
+        best_pattern.get(
+            "suit"
+        )
+    )
+
+    if not suit:
+        return
+
+    # ================================================================
+    # СОЗДАЁМ ОДИН ПРОГНОЗ
+    # ================================================================
+
+    prediction = create_pattern_prediction(
+        trigger_number,
+        best_pattern
+    )
+
+    if not prediction:
+        return
+
+    target_number = prediction[
+        "target_number"
+    ]
+
+    prediction_key = (
+        trigger_number,
+        target_number,
+        suit,
+    )
+
+    # Уже обрабатывали именно этот прогноз
+    if (
+        prediction_key
+        in processed_prediction_keys
+    ):
+        return
+
+    # ================================================================
+    # ПРОВЕРЯЕМ, НЕТ ЛИ УЖЕ ПРОГНОЗА НА ЭТУ ИГРУ
+    #
+    # ВАЖНО:
+    # если #N1044 уже получил любой прогноз,
+    # второй прогноз на #N1044 НЕ отправляем.
+    # ================================================================
+
+    for old in predictions:
+
+        if old.get(
+            "status"
+        ) not in (
+            "pending",
+            "win",
         ):
             continue
 
-        exists = False
+        old_target = old.get(
+            "target_number"
+        )
 
-        for old in predictions:
+        if old_target == target_number:
 
-            if old.get(
-                "status"
-            ) not in (
-                "pending",
-                "win",
-            ):
-
-                continue
-
-            if (
-                old.get(
-                    "trigger_number"
-                )
-                == trigger_number
-                and
-                old.get(
-                    "target_number"
-                )
-                == target_number
-                and
-                normalize_suit(
-                    old.get(
-                        "pattern_suit"
-                    )
-                )
-                == suit
-            ):
-
-                exists = True
-                break
-
-        if exists:
+            print(
+                f"⛔ #N{target_number}: "
+                f"прогноз уже существует "
+                f"({normalize_suit(old.get('pattern_suit'))})",
+                flush=True,
+            )
 
             processed_prediction_keys.add(
                 prediction_key
             )
 
-            continue
+            return
 
-        predictions.append(
-            prediction
-        )
+    # ================================================================
+    # СОЗДАЁМ ПРОГНОЗ
+    # ================================================================
 
-        processed_prediction_keys.add(
-            prediction_key
-        )
+    predictions.append(
+        prediction
+    )
 
-        save_predictions()
+    processed_prediction_keys.add(
+        prediction_key
+    )
 
-        print(
-            f"🎯 ПАТТЕРН → {suit}",
-            flush=True,
-        )
+    save_predictions()
 
-        print(
-            f"📌 Триггер: "
-            f"#N{trigger_number}",
-            flush=True,
-        )
+    print(
+        f"🎯 ВЫБРАН ЛУЧШИЙ ПАТТЕРН",
+        flush=True,
+    )
 
-        print(
-            f"📐 Паттерн: "
-            f"{pattern['pattern']}",
-            flush=True,
-        )
+    print(
+        f"📌 Триггер: #N{trigger_number}",
+        flush=True,
+    )
 
-        print(
-            f"🎯 Цель: "
-            f"#N{target_number}",
-            flush=True,
-        )
+    print(
+        f"📐 Паттерн: "
+        f"{best_pattern['pattern']}",
+        flush=True,
+    )
 
-        send_prediction(
-            prediction
-        )
+    print(
+        f"📊 Точность: "
+        f"{best_pattern.get('rate', 0)}",
+        flush=True,
+    )
+
+    print(
+        f"📊 Повторений: "
+        f"{best_pattern.get('occurrences', 0)}",
+        flush=True,
+    )
+
+    print(
+        f"📏 Длина: "
+        f"{pattern_length(best_pattern)}",
+        flush=True,
+    )
+
+    print(
+        f"🎯 Цель: #N{target_number}",
+        flush=True,
+    )
+
+    print(
+        f"♠️ Масть: {suit}",
+        flush=True,
+    )
+
+    send_prediction(
+        prediction
+    )
 
 
 # =====================================================================
