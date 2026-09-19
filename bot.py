@@ -56,7 +56,6 @@ DOGON_GAMES = 3
 
 PREDICTION_TIMEOUT_HOURS = 24
 
-# Сколько последних игр держим в памяти
 MAX_GAMES_CACHE = 500
 
 
@@ -278,6 +277,7 @@ def parse_cards(text):
         return result
 
     for match in CARD_RE.finditer(text):
+
         rank = normalize_rank(match.group(1))
         suit = normalize_suit(match.group(2))
 
@@ -297,17 +297,26 @@ def parse_cards(text):
 # =====================================================================
 
 def parse_game_message(text):
+
     if not text:
         return None
 
-    number_match = re.search(r"#N(\d+)", text)
+    number_match = re.search(
+        r"#N(\d+)",
+        text
+    )
 
     if not number_match:
         return None
 
-    game_number = int(number_match.group(1))
+    game_number = int(
+        number_match.group(1)
+    )
 
-    groups = re.findall(r"\(([^()]*)\)", text)
+    groups = re.findall(
+        r"\(([^()]*)\)",
+        text
+    )
 
     if len(groups) < 2:
         return None
@@ -315,21 +324,49 @@ def parse_game_message(text):
     player_text = groups[0]
     dealer_text = groups[1]
 
-    player_cards = parse_cards(player_text)
-    dealer_cards = parse_cards(dealer_text)
+    player_cards = parse_cards(
+        player_text
+    )
+
+    dealer_cards = parse_cards(
+        dealer_text
+    )
 
     if not player_cards:
         return None
 
-    player_score = cyber21_score(player_cards)
-    dealer_score = cyber21_score(dealer_cards)
+    player_score = cyber21_score(
+        player_cards
+    )
 
-    id_match = re.search(r"ID:\s*(\d+)", text)
+    dealer_score = cyber21_score(
+        dealer_cards
+    )
 
-    game_id = id_match.group(1) if id_match else None
+    id_match = re.search(
+        r"ID:\s*(\d+)",
+        text
+    )
 
-    is_draw = bool(re.search(r"#X\b", text))
-    is_ochko = bool(re.search(r"#O\b", text))
+    game_id = (
+        id_match.group(1)
+        if id_match
+        else None
+    )
+
+    is_draw = bool(
+        re.search(
+            r"#X\b",
+            text
+        )
+    )
+
+    is_ochko = bool(
+        re.search(
+            r"#O\b",
+            text
+        )
+    )
 
     return {
         "game_number": game_number,
@@ -357,11 +394,23 @@ def parse_game_message(text):
 # =====================================================================
 
 def log_game(game):
-    player = game.get("player_cards", [])
-    dealer = game.get("dealer_cards", [])
+
+    player = game.get(
+        "player_cards",
+        []
+    )
+
+    dealer = game.get(
+        "dealer_cards",
+        []
+    )
 
     print("", flush=True)
-    print("────────────────────────────────────", flush=True)
+
+    print(
+        "────────────────────────────────────",
+        flush=True,
+    )
 
     print(
         f"🎮 ИГРА #N{game['game_number']}",
@@ -381,18 +430,23 @@ def log_game(game):
     )
 
     if game.get("is_draw"):
+
         print(
             "🔰 #X — НИЧЬЯ",
             flush=True,
         )
 
     if game.get("is_ochko"):
+
         print(
             "⭕ #O — ОЧКО",
             flush=True,
         )
 
-    print("────────────────────────────────────", flush=True)
+    print(
+        "────────────────────────────────────",
+        flush=True,
+    )
 
 
 # =====================================================================
@@ -400,8 +454,12 @@ def log_game(game):
 # =====================================================================
 
 def load_offset():
+
     try:
-        if os.path.exists(OFFSET_FILE):
+
+        if os.path.exists(
+            OFFSET_FILE
+        ):
 
             with open(
                 OFFSET_FILE,
@@ -421,14 +479,18 @@ def load_offset():
 
 
 def save_offset(offset):
+
     try:
+
         with open(
             OFFSET_FILE,
             "w",
             encoding="utf-8"
         ) as f:
 
-            f.write(str(offset))
+            f.write(
+                str(offset)
+            )
 
     except Exception as e:
 
@@ -443,11 +505,15 @@ def save_offset(offset):
 # =====================================================================
 
 def load_predictions():
+
     global predictions
 
     try:
 
-        if not os.path.exists(PREDICTIONS_FILE):
+        if not os.path.exists(
+            PREDICTIONS_FILE
+        ):
+
             predictions = []
             return
 
@@ -459,15 +525,22 @@ def load_predictions():
 
             data = json.load(f)
 
-        if isinstance(data, list):
+        if isinstance(
+            data,
+            list
+        ):
+
             predictions = data
+
         else:
+
             predictions = []
 
     except Exception as e:
 
         print(
-            f"⚠️ Ошибка чтения {PREDICTIONS_FILE}: {e}",
+            f"⚠️ Ошибка чтения "
+            f"{PREDICTIONS_FILE}: {e}",
             flush=True,
         )
 
@@ -478,7 +551,10 @@ def save_predictions():
 
     try:
 
-        tmp = PREDICTIONS_FILE + ".tmp"
+        tmp = (
+            PREDICTIONS_FILE
+            + ".tmp"
+        )
 
         with open(
             tmp,
@@ -501,9 +577,57 @@ def save_predictions():
     except Exception as e:
 
         print(
-            f"⚠️ Ошибка сохранения прогнозов: {e}",
+            f"⚠️ Ошибка сохранения "
+            f"прогнозов: {e}",
             flush=True,
         )
+
+
+# =====================================================================
+# DELETE WEBHOOK
+# =====================================================================
+
+def delete_webhook():
+
+    try:
+
+        response = SESSION.post(
+            f"{TELEGRAM_API}/deleteWebhook",
+
+            json={
+                "drop_pending_updates": False
+            },
+
+            timeout=10,
+        )
+
+        data = response.json()
+
+        if data.get("ok"):
+
+            print(
+                "✅ Webhook удалён, "
+                "используем getUpdates",
+                flush=True,
+            )
+
+            return True
+
+        print(
+            f"❌ Ошибка deleteWebhook: "
+            f"{data}",
+            flush=True,
+        )
+
+    except Exception as e:
+
+        print(
+            f"❌ Ошибка удаления webhook: "
+            f"{e}",
+            flush=True,
+        )
+
+    return False
 
 
 # =====================================================================
@@ -531,24 +655,31 @@ def telegram_send(text):
 
         if data.get("ok"):
 
-            return data["result"]["message_id"]
+            return data[
+                "result"
+            ]["message_id"]
 
         print(
-            f"❌ Telegram sendMessage: {data}",
+            f"❌ Telegram sendMessage: "
+            f"{data}",
             flush=True,
         )
 
     except Exception as e:
 
         print(
-            f"❌ Ошибка отправки Telegram: {e}",
+            f"❌ Ошибка отправки Telegram: "
+            f"{e}",
             flush=True,
         )
 
     return None
 
 
-def telegram_edit(message_id, text):
+def telegram_edit(
+    message_id,
+    text
+):
 
     if not message_id:
         return False
@@ -570,12 +701,15 @@ def telegram_edit(message_id, text):
 
         data = response.json()
 
-        return bool(data.get("ok"))
+        return bool(
+            data.get("ok")
+        )
 
     except Exception as e:
 
         print(
-            f"⚠️ Ошибка редактирования Telegram: {e}",
+            f"⚠️ Ошибка редактирования "
+            f"Telegram: {e}",
             flush=True,
         )
 
@@ -586,10 +720,17 @@ def telegram_edit(message_id, text):
 # GAME NUMBER
 # =====================================================================
 
-def add_game_offset(number, offset):
+def add_game_offset(
+    number,
+    offset
+):
 
     return (
-        (int(number) - 1 + int(offset)) % 1440
+        (
+            int(number)
+            - 1
+            + int(offset)
+        ) % 1440
     ) + 1
 
 
@@ -602,7 +743,10 @@ patterns = []
 
 def get_pattern_text(item):
 
-    if not isinstance(item, dict):
+    if not isinstance(
+        item,
+        dict
+    ):
         return None
 
     for key in (
@@ -611,17 +755,29 @@ def get_pattern_text(item):
         "name",
     ):
 
-        value = item.get(key)
+        value = item.get(
+            key
+        )
 
-        if isinstance(value, str):
+        if isinstance(
+            value,
+            str
+        ):
+
             return value.strip()
 
     return None
 
 
-def get_pattern_suit(item, fallback=None):
+def get_pattern_suit(
+    item,
+    fallback=None
+):
 
-    if isinstance(item, dict):
+    if isinstance(
+        item,
+        dict
+    ):
 
         for key in (
             "suit",
@@ -631,17 +787,25 @@ def get_pattern_suit(item, fallback=None):
             "forecast_suit",
         ):
 
-            value = item.get(key)
+            value = item.get(
+                key
+            )
 
-            suit = normalize_pattern_suit(value)
+            suit = normalize_pattern_suit(
+                value
+            )
 
             if suit:
                 return suit
 
-    return normalize_pattern_suit(fallback)
+    return normalize_pattern_suit(
+        fallback
+    )
 
 
-def parse_pattern_string(pattern_text):
+def parse_pattern_string(
+    pattern_text
+):
 
     if not pattern_text:
         return []
@@ -660,8 +824,13 @@ def parse_pattern_string(pattern_text):
         if not match:
             continue
 
-        position = int(match.group(1))
-        feature = match.group(2).strip()
+        position = int(
+            match.group(1)
+        )
+
+        feature = match.group(
+            2
+        ).strip()
 
         result.append({
             "position": position,
@@ -681,10 +850,13 @@ def load_patterns():
 
     patterns = []
 
-    if not os.path.exists(PATTERNS_FILE):
+    if not os.path.exists(
+        PATTERNS_FILE
+    ):
 
         print(
-            f"❌ Не найден {PATTERNS_FILE}",
+            f"❌ Не найден "
+            f"{PATTERNS_FILE}",
             flush=True,
         )
 
@@ -703,27 +875,27 @@ def load_patterns():
     except Exception as e:
 
         print(
-            f"❌ Ошибка чтения {PATTERNS_FILE}: {e}",
+            f"❌ Ошибка чтения "
+            f"{PATTERNS_FILE}: {e}",
             flush=True,
         )
 
         return
 
-    # ---------------------------------------------------------------
-    # Вариант 1:
-    # [
-    #   {
-    #      "pattern": "...",
-    #      "suit": "♠️"
-    #   }
-    # ]
-    # ---------------------------------------------------------------
+    # ================================================================
+    # LIST
+    # ================================================================
 
-    if isinstance(data, list):
+    if isinstance(
+        data,
+        list
+    ):
 
         for item in data:
 
-            pattern_text = get_pattern_text(item)
+            pattern_text = get_pattern_text(
+                item
+            )
 
             if not pattern_text:
                 continue
@@ -735,7 +907,9 @@ def load_patterns():
             if not parsed:
                 continue
 
-            suit = get_pattern_suit(item)
+            suit = get_pattern_suit(
+                item
+            )
 
             if not suit:
                 continue
@@ -744,14 +918,17 @@ def load_patterns():
                 "pattern": pattern_text,
                 "parts": parsed,
                 "suit": suit,
+
                 "occurrences": item.get(
                     "occurrences",
                     0,
                 ),
+
                 "hits": item.get(
                     "hits",
                     0,
                 ),
+
                 "rate": item.get(
                     "rate",
                     item.get(
@@ -761,100 +938,121 @@ def load_patterns():
                 ),
             })
 
-    # ---------------------------------------------------------------
-    # Вариант 2:
-    #
-    # {
-    #   "♠": [...],
-    #   "♣": [...],
-    #   "♦": [...],
-    #   "♥": [...]
-    # }
-    # ---------------------------------------------------------------
+    # ================================================================
+    # DICT
+    # ================================================================
 
-    elif isinstance(data, dict):
+    elif isinstance(
+        data,
+        dict
+    ):
 
         for key, value in data.items():
 
-            fallback_suit = normalize_pattern_suit(
-                key
+            fallback_suit = (
+                normalize_pattern_suit(
+                    key
+                )
             )
 
-            if isinstance(value, list):
+            if not isinstance(
+                value,
+                list
+            ):
+                continue
 
-                for item in value:
+            for item in value:
 
-                    if isinstance(item, str):
+                if isinstance(
+                    item,
+                    str
+                ):
 
-                        pattern_text = item
+                    pattern_text = item
 
-                        parsed = parse_pattern_string(
+                    parsed = (
+                        parse_pattern_string(
                             pattern_text
                         )
+                    )
 
-                        if parsed and fallback_suit:
+                    if (
+                        parsed
+                        and fallback_suit
+                    ):
 
-                            patterns.append({
-                                "pattern": pattern_text,
-                                "parts": parsed,
-                                "suit": fallback_suit,
-                                "occurrences": 0,
-                                "hits": 0,
-                                "rate": 0,
-                            })
+                        patterns.append({
+                            "pattern": pattern_text,
+                            "parts": parsed,
+                            "suit": fallback_suit,
+                            "occurrences": 0,
+                            "hits": 0,
+                            "rate": 0,
+                        })
 
-                        continue
+                    continue
 
-                    if not isinstance(item, dict):
-                        continue
+                if not isinstance(
+                    item,
+                    dict
+                ):
+                    continue
 
-                    pattern_text = get_pattern_text(
+                pattern_text = (
+                    get_pattern_text(
                         item
                     )
+                )
 
-                    if not pattern_text:
-                        continue
+                if not pattern_text:
+                    continue
 
-                    parsed = parse_pattern_string(
+                parsed = (
+                    parse_pattern_string(
                         pattern_text
                     )
+                )
 
-                    if not parsed:
-                        continue
+                if not parsed:
+                    continue
 
-                    suit = get_pattern_suit(
-                        item,
-                        fallback_suit,
-                    )
+                suit = get_pattern_suit(
+                    item,
+                    fallback_suit,
+                )
 
-                    if not suit:
-                        continue
+                if not suit:
+                    continue
 
-                    patterns.append({
-                        "pattern": pattern_text,
-                        "parts": parsed,
-                        "suit": suit,
-                        "occurrences": item.get(
-                            "occurrences",
+                patterns.append({
+                    "pattern": pattern_text,
+                    "parts": parsed,
+                    "suit": suit,
+
+                    "occurrences": item.get(
+                        "occurrences",
+                        0,
+                    ),
+
+                    "hits": item.get(
+                        "hits",
+                        0,
+                    ),
+
+                    "rate": item.get(
+                        "rate",
+                        item.get(
+                            "confidence",
                             0,
                         ),
-                        "hits": item.get(
-                            "hits",
-                            0,
-                        ),
-                        "rate": item.get(
-                            "rate",
-                            item.get(
-                                "confidence",
-                                0,
-                            ),
-                        ),
-                    })
+                    ),
+                })
 
     print("", flush=True)
 
     print(
-        f"🧠 Загружено паттернов: {len(patterns)}",
+        f"🧠 Загружено паттернов: "
+        f"{len(patterns)}",
         flush=True,
     )
 
@@ -862,13 +1060,20 @@ def load_patterns():
 
     for pattern in patterns:
 
-        suit = pattern["suit"]
+        suit = pattern[
+            "suit"
+        ]
 
         suits_count[suit] = (
-            suits_count.get(suit, 0) + 1
+            suits_count.get(
+                suit,
+                0
+            ) + 1
         )
 
-    for suit, count in suits_count.items():
+    for suit, count in (
+        suits_count.items()
+    ):
 
         print(
             f"   {suit}: {count}",
@@ -883,7 +1088,9 @@ def load_patterns():
 def get_card_ranks(cards):
 
     return [
-        normalize_rank(c.get("rank"))
+        normalize_rank(
+            c.get("rank")
+        )
         for c in cards
     ]
 
@@ -898,7 +1105,43 @@ def get_card_suits(cards):
     ]
 
 
-def feature_value(game, feature):
+def normalize_card_pattern(
+    value
+):
+
+    value = str(
+        value
+    ).strip()
+
+    match = re.fullmatch(
+        r"(10|[6-9AJQK])"
+        r"(♠️?|♣️?|♦️?|♥️?)",
+        value,
+    )
+
+    if not match:
+        return value
+
+    rank = normalize_rank(
+        match.group(1)
+    )
+
+    suit = normalize_suit(
+        match.group(2)
+    )
+
+    if not rank or not suit:
+        return value
+
+    return (
+        f"{rank}{suit}"
+    )
+
+
+def feature_value(
+    game,
+    feature
+):
 
     if not game:
         return None
@@ -932,56 +1175,82 @@ def feature_value(game, feature):
 
         return None
 
-    ranks = get_card_ranks(cards)
-    suits = get_card_suits(cards)
+    ranks = get_card_ranks(
+        cards
+    )
 
-    # ---------------------------------------------------------------
+    suits = get_card_suits(
+        cards
+    )
+
+    # ================================================================
     # COUNT
-    # ---------------------------------------------------------------
+    # ================================================================
 
     if body == "COUNT":
-
         return len(cards)
 
     if body.startswith("COUNT="):
 
         try:
-            return len(cards) == int(
-                body.split("=", 1)[1]
+
+            return (
+                len(cards)
+                ==
+                int(
+                    body.split(
+                        "=",
+                        1
+                    )[1]
+                )
             )
+
         except Exception:
             return False
 
-    # ---------------------------------------------------------------
+    # ================================================================
     # FIRST
-    # ---------------------------------------------------------------
+    # ================================================================
 
     if body == "FIRST":
 
         return (
-            card_to_text(cards[0])
+            normalize_card_pattern(
+                card_to_text(
+                    cards[0]
+                )
+            )
             if cards
             else None
         )
 
     if body.startswith("FIRST="):
 
-        expected = body.split(
-            "=",
-            1,
-        )[1].strip()
+        expected = (
+            body.split(
+                "=",
+                1
+            )[1].strip()
+        )
 
         if not cards:
             return False
 
-        return (
-            card_to_text(cards[0])
-            == expected
+        actual = normalize_card_pattern(
+            card_to_text(
+                cards[0]
+            )
         )
 
-    # ---------------------------------------------------------------
+        expected = normalize_card_pattern(
+            expected
+        )
+
+        return actual == expected
+
+    # ================================================================
     # FIRST_RANK
-    # ---------------------------------------------------------------
+    # ================================================================
 
     if body == "FIRST_RANK":
 
@@ -991,21 +1260,24 @@ def feature_value(game, feature):
             else None
         )
 
-    if body.startswith("FIRST_RANK="):
+    if body.startswith(
+        "FIRST_RANK="
+    ):
 
         expected = body.split(
             "=",
-            1,
+            1
         )[1].strip()
 
         return (
             bool(ranks)
-            and ranks[0] == expected
+            and
+            ranks[0] == expected
         )
 
-    # ---------------------------------------------------------------
+    # ================================================================
     # FIRST_SUIT
-    # ---------------------------------------------------------------
+    # ================================================================
 
     if body == "FIRST_SUIT":
 
@@ -1015,23 +1287,26 @@ def feature_value(game, feature):
             else None
         )
 
-    if body.startswith("FIRST_SUIT="):
+    if body.startswith(
+        "FIRST_SUIT="
+    ):
 
         expected = suit_short(
             body.split(
                 "=",
-                1,
+                1
             )[1].strip()
         )
 
         return (
             bool(suits)
-            and suits[0] == expected
+            and
+            suits[0] == expected
         )
 
-    # ---------------------------------------------------------------
+    # ================================================================
     # FIRST2
-    # ---------------------------------------------------------------
+    # ================================================================
 
     if body == "FIRST2":
 
@@ -1043,14 +1318,16 @@ def feature_value(game, feature):
             f"{ranks[1]}{suits[1]}"
         )
 
-    if body.startswith("FIRST2="):
+    if body.startswith(
+        "FIRST2="
+    ):
 
         if len(cards) < 2:
             return False
 
         expected = body.split(
             "=",
-            1,
+            1
         )[1].strip()
 
         actual = (
@@ -1058,11 +1335,25 @@ def feature_value(game, feature):
             f"{ranks[1]}{suits[1]}"
         )
 
-        return actual == expected
+        expected_parts = [
+            normalize_card_pattern(x)
+            for x in expected.split(",")
+        ]
 
-    # ---------------------------------------------------------------
+        actual_parts = [
+            normalize_card_pattern(x)
+            for x in actual.split(",")
+        ]
+
+        return (
+            actual_parts
+            ==
+            expected_parts
+        )
+
+    # ================================================================
     # FIRST2_RANKS
-    # ---------------------------------------------------------------
+    # ================================================================
 
     if body == "FIRST2_RANKS":
 
@@ -1070,28 +1361,32 @@ def feature_value(game, feature):
             return None
 
         return (
-            f"{ranks[0]},{ranks[1]}"
+            f"{ranks[0]},"
+            f"{ranks[1]}"
         )
 
-    if body.startswith("FIRST2_RANKS="):
+    if body.startswith(
+        "FIRST2_RANKS="
+    ):
 
         if len(ranks) < 2:
             return False
 
         expected = body.split(
             "=",
-            1,
+            1
         )[1].strip()
 
         actual = (
-            f"{ranks[0]},{ranks[1]}"
+            f"{ranks[0]},"
+            f"{ranks[1]}"
         )
 
         return actual == expected
 
-    # ---------------------------------------------------------------
+    # ================================================================
     # FIRST2_SUITS
-    # ---------------------------------------------------------------
+    # ================================================================
 
     if body == "FIRST2_SUITS":
 
@@ -1099,32 +1394,38 @@ def feature_value(game, feature):
             return None
 
         return (
-            f"{suits[0]},{suits[1]}"
+            f"{suits[0]},"
+            f"{suits[1]}"
         )
 
-    if body.startswith("FIRST2_SUITS="):
+    if body.startswith(
+        "FIRST2_SUITS="
+    ):
 
         if len(suits) < 2:
             return False
 
         expected = body.split(
             "=",
-            1,
+            1
         )[1].strip()
 
         expected_parts = [
-            suit_short(x.strip())
+            suit_short(
+                x.strip()
+            )
             for x in expected.split(",")
         ]
 
         return (
             suits[:2]
-            == expected_parts
+            ==
+            expected_parts
         )
 
-    # ---------------------------------------------------------------
+    # ================================================================
     # FIRST3
-    # ---------------------------------------------------------------
+    # ================================================================
 
     if body == "FIRST3":
 
@@ -1137,14 +1438,16 @@ def feature_value(game, feature):
             f"{ranks[2]}{suits[2]}"
         )
 
-    if body.startswith("FIRST3="):
+    if body.startswith(
+        "FIRST3="
+    ):
 
         if len(cards) < 3:
             return False
 
         expected = body.split(
             "=",
-            1,
+            1
         )[1].strip()
 
         actual = (
@@ -1153,11 +1456,25 @@ def feature_value(game, feature):
             f"{ranks[2]}{suits[2]}"
         )
 
-        return actual == expected
+        expected_parts = [
+            normalize_card_pattern(x)
+            for x in expected.split(",")
+        ]
 
-    # ---------------------------------------------------------------
+        actual_parts = [
+            normalize_card_pattern(x)
+            for x in actual.split(",")
+        ]
+
+        return (
+            actual_parts
+            ==
+            expected_parts
+        )
+
+    # ================================================================
     # FIRST3_RANKS
-    # ---------------------------------------------------------------
+    # ================================================================
 
     if body == "FIRST3_RANKS":
 
@@ -1168,24 +1485,27 @@ def feature_value(game, feature):
             ranks[:3]
         )
 
-    if body.startswith("FIRST3_RANKS="):
+    if body.startswith(
+        "FIRST3_RANKS="
+    ):
 
         if len(ranks) < 3:
             return False
 
         expected = body.split(
             "=",
-            1,
+            1
         )[1].strip()
 
         return (
             ",".join(ranks[:3])
-            == expected
+            ==
+            expected
         )
 
-    # ---------------------------------------------------------------
+    # ================================================================
     # FIRST3_SUITS
-    # ---------------------------------------------------------------
+    # ================================================================
 
     if body == "FIRST3_SUITS":
 
@@ -1196,68 +1516,91 @@ def feature_value(game, feature):
             suits[:3]
         )
 
-    if body.startswith("FIRST3_SUITS="):
+    if body.startswith(
+        "FIRST3_SUITS="
+    ):
 
         if len(suits) < 3:
             return False
 
         expected = body.split(
             "=",
-            1,
+            1
         )[1].strip()
 
         expected_parts = [
-            suit_short(x.strip())
+            suit_short(
+                x.strip()
+            )
             for x in expected.split(",")
         ]
 
         return (
             suits[:3]
-            == expected_parts
+            ==
+            expected_parts
         )
 
-    # ---------------------------------------------------------------
+    # ================================================================
     # RANKS
-    # ---------------------------------------------------------------
+    # ================================================================
 
     if body == "RANKS":
 
-        return ",".join(ranks)
+        return ",".join(
+            ranks
+        )
 
-    if body.startswith("RANKS="):
+    if body.startswith(
+        "RANKS="
+    ):
 
         expected = body.split(
             "=",
-            1,
+            1
         )[1].strip()
 
-        return ",".join(ranks) == expected
+        return (
+            ",".join(ranks)
+            ==
+            expected
+        )
 
-    # ---------------------------------------------------------------
+    # ================================================================
     # SUITS
-    # ---------------------------------------------------------------
+    # ================================================================
 
     if body == "SUITS":
 
-        return ",".join(suits)
+        return ",".join(
+            suits
+        )
 
-    if body.startswith("SUITS="):
+    if body.startswith(
+        "SUITS="
+    ):
 
         expected = body.split(
             "=",
-            1,
+            1
         )[1].strip()
 
         expected_parts = [
-            suit_short(x.strip())
+            suit_short(
+                x.strip()
+            )
             for x in expected.split(",")
         ]
 
-        return suits == expected_parts
+        return (
+            suits
+            ==
+            expected_parts
+        )
 
-    # ---------------------------------------------------------------
+    # ================================================================
     # EXACT
-    # ---------------------------------------------------------------
+    # ================================================================
 
     if body == "EXACT":
 
@@ -1266,11 +1609,13 @@ def feature_value(game, feature):
             for c in cards
         )
 
-    if body.startswith("EXACT="):
+    if body.startswith(
+        "EXACT="
+    ):
 
         expected = body.split(
             "=",
-            1,
+            1
         )[1].strip()
 
         actual = " ".join(
@@ -1278,42 +1623,48 @@ def feature_value(game, feature):
             for c in cards
         )
 
-        return actual == expected
+        return (
+            normalize_card_pattern(actual)
+            ==
+            normalize_card_pattern(expected)
+        )
 
-    # ---------------------------------------------------------------
-    # HAS_J / HAS_Q / HAS_K / HAS_A
-    # ---------------------------------------------------------------
+    # ================================================================
+    # HAS
+    # ================================================================
 
     if body == "HAS_J":
-
         return "J" in ranks
 
     if body == "HAS_Q":
-
         return "Q" in ranks
 
     if body == "HAS_K":
-
         return "K" in ranks
 
     if body == "HAS_A":
-
         return "A" in ranks
 
     return None
 
 
-def feature_matches(game, feature):
+def feature_matches(
+    game,
+    feature
+):
 
     value = feature_value(
         game,
-        feature,
+        feature
     )
 
-    # Для булевых условий
     if "=" in feature:
 
-        if isinstance(value, bool):
+        if isinstance(
+            value,
+            bool
+        ):
+
             return value
 
         return bool(value)
@@ -1327,12 +1678,12 @@ def feature_matches(game, feature):
 
 def get_game_for_position(
     trigger_number,
-    position,
+    position
 ):
 
     game_number = add_game_offset(
         trigger_number,
-        position,
+        position
     )
 
     return games_cache.get(
@@ -1342,17 +1693,22 @@ def get_game_for_position(
 
 def pattern_matches(
     pattern,
-    trigger_number,
+    trigger_number
 ):
 
     for part in pattern["parts"]:
 
-        position = part["position"]
-        feature = part["feature"]
+        position = part[
+            "position"
+        ]
+
+        feature = part[
+            "feature"
+        ]
 
         game = get_game_for_position(
             trigger_number,
-            position - 1,
+            position - 1
         )
 
         if not game:
@@ -1360,7 +1716,7 @@ def pattern_matches(
 
         if not feature_matches(
             game,
-            feature,
+            feature
         ):
             return False
 
@@ -1368,7 +1724,7 @@ def pattern_matches(
 
 
 # =====================================================================
-# FIND BEST MATCHING PATTERN
+# FIND MATCHING PATTERNS
 # =====================================================================
 
 def find_matching_patterns(
@@ -1379,20 +1735,26 @@ def find_matching_patterns(
 
     for pattern in patterns:
 
-        if not pattern_matches(
+        if pattern_matches(
             pattern,
-            trigger_number,
+            trigger_number
         ):
-            continue
 
-        matched.append(pattern)
+            matched.append(
+                pattern
+            )
 
     return matched
 
 
-def pattern_length(pattern):
+def pattern_length(
+    pattern
+):
 
-    if not pattern.get("parts"):
+    if not pattern.get(
+        "parts"
+    ):
+
         return 0
 
     return max(
@@ -1407,7 +1769,7 @@ def pattern_length(pattern):
 
 def create_pattern_prediction(
     trigger_number,
-    pattern,
+    pattern
 ):
 
     length = pattern_length(
@@ -1419,15 +1781,19 @@ def create_pattern_prediction(
 
     target_number = add_game_offset(
         trigger_number,
-        length,
+        length
     )
 
-    suit = pattern["suit"]
+    suit = pattern[
+        "suit"
+    ]
 
     return {
         "algorithm": "pattern_suit",
 
-        "pattern": pattern["pattern"],
+        "pattern": pattern[
+            "pattern"
+        ],
 
         "pattern_suit": suit,
 
@@ -1456,7 +1822,7 @@ def create_pattern_prediction(
 
 
 # =====================================================================
-# CREATE PREDICTION FROM MATCH
+# CREATE PREDICTIONS FROM MATCH
 # =====================================================================
 
 def create_predictions_for_game(
@@ -1479,45 +1845,56 @@ def create_predictions_for_game(
         flush=True,
     )
 
-    # ---------------------------------------------------------------
-    # Чтобы один триггер не породил несколько
-    # одинаковых прогнозов на одну игру.
-    #
-    # Если несколько паттернов дают разные масти,
-    # берём паттерн с большей длиной,
-    # затем с большим количеством совпадений.
-    # ---------------------------------------------------------------
-
     grouped = {}
 
     for pattern in matches:
 
-        suit = pattern["suit"]
+        suit = pattern[
+            "suit"
+        ]
 
-        current = grouped.get(suit)
+        current = grouped.get(
+            suit
+        )
 
         if current is None:
+
             grouped[suit] = pattern
             continue
 
         current_key = (
-            pattern_length(current),
-            current.get("occurrences", 0),
+            pattern_length(
+                current
+            ),
+            current.get(
+                "occurrences",
+                0
+            ),
         )
 
         new_key = (
-            pattern_length(pattern),
-            pattern.get("occurrences", 0),
+            pattern_length(
+                pattern
+            ),
+            pattern.get(
+                "occurrences",
+                0
+            ),
         )
 
         if new_key > current_key:
+
             grouped[suit] = pattern
 
-    for suit, pattern in grouped.items():
+    for suit, pattern in (
+        grouped.items()
+    ):
 
-        prediction = create_pattern_prediction(
-            trigger_number,
-            pattern,
+        prediction = (
+            create_pattern_prediction(
+                trigger_number,
+                pattern
+            )
         )
 
         if not prediction:
@@ -1533,38 +1910,53 @@ def create_predictions_for_game(
             suit,
         )
 
-        if prediction_key in processed_prediction_keys:
+        if (
+            prediction_key
+            in processed_prediction_keys
+        ):
             continue
 
-        # Уже существует такой прогноз
         exists = False
 
         for old in predictions:
 
-            if old.get("status") not in (
+            if old.get(
+                "status"
+            ) not in (
                 "pending",
                 "win",
             ):
+
                 continue
 
             if (
-                old.get("trigger_number")
+                old.get(
+                    "trigger_number"
+                )
                 == trigger_number
                 and
-                old.get("target_number")
+                old.get(
+                    "target_number"
+                )
                 == target_number
                 and
                 normalize_suit(
-                    old.get("pattern_suit")
-                ) == suit
+                    old.get(
+                        "pattern_suit"
+                    )
+                )
+                == suit
             ):
+
                 exists = True
                 break
 
         if exists:
+
             processed_prediction_keys.add(
                 prediction_key
             )
+
             continue
 
         predictions.append(
@@ -1583,7 +1975,8 @@ def create_predictions_for_game(
         )
 
         print(
-            f"📌 Триггер: #N{trigger_number}",
+            f"📌 Триггер: "
+            f"#N{trigger_number}",
             flush=True,
         )
 
@@ -1594,12 +1987,70 @@ def create_predictions_for_game(
         )
 
         print(
-            f"🎯 Цель: #N{target_number}",
+            f"🎯 Цель: "
+            f"#N{target_number}",
             flush=True,
         )
 
         send_prediction(
             prediction
+        )
+
+
+# =====================================================================
+# CHECK RECENT PATTERN WINDOWS
+# =====================================================================
+
+def check_patterns_ending_with(
+    newest_game_number
+):
+
+    """
+    Критически важная функция.
+
+    Если пришла #N1384, а паттерн:
+
+        G1 = #N1382
+        G2 = #N1383
+        G3 = #N1384
+
+    то триггером является #N1382,
+    а прогноз должен быть на #N1385.
+
+    Поэтому после появления новой игры
+    проверяем не только её как G1,
+    а все возможные начала паттернов.
+    """
+
+    if not patterns:
+        return
+
+    possible_triggers = set()
+
+    for pattern in patterns:
+
+        length = pattern_length(
+            pattern
+        )
+
+        if length <= 0:
+            continue
+
+        trigger_number = add_game_offset(
+            newest_game_number,
+            -(length - 1)
+        )
+
+        possible_triggers.add(
+            trigger_number
+        )
+
+    for trigger_number in sorted(
+        possible_triggers
+    ):
+
+        create_predictions_for_game(
+            trigger_number
         )
 
 
@@ -1630,7 +2081,7 @@ def make_prediction_message(
 
 def make_result_message(
     prediction,
-    result,
+    result
 ):
 
     target = prediction[
@@ -1644,12 +2095,15 @@ def make_result_message(
     )
 
     if result == "win":
+
         mark = " ✅"
 
     elif result == "lose":
+
         mark = " ❌"
 
     else:
+
         mark = " ⚠️"
 
     return (
@@ -1682,15 +2136,15 @@ def send_prediction(
 
         return False
 
-    prediction["message_id"] = (
-        message_id
-    )
+    prediction[
+        "message_id"
+    ] = message_id
 
-    prediction["sent_at"] = (
-        datetime.now(
-            MOSCOW_TZ
-        ).isoformat()
-    )
+    prediction[
+        "sent_at"
+    ] = datetime.now(
+        MOSCOW_TZ
+    ).isoformat()
 
     save_predictions()
 
@@ -1759,6 +2213,7 @@ def check_predictions():
         if prediction.get(
             "status"
         ) != "pending":
+
             continue
 
         target = prediction.get(
@@ -1768,9 +2223,9 @@ def check_predictions():
         if not target:
             continue
 
-        # -------------------------------------------------------------
+        # ============================================================
         # TIMEOUT
-        # -------------------------------------------------------------
+        # ============================================================
 
         sent_at_str = prediction.get(
             "sent_at"
@@ -1792,9 +2247,9 @@ def check_predictions():
                     )
                 ):
 
-                    prediction["status"] = (
-                        "void"
-                    )
+                    prediction[
+                        "status"
+                    ] = "void"
 
                     telegram_edit(
                         prediction.get(
@@ -1820,12 +2275,13 @@ def check_predictions():
             except Exception:
                 pass
 
-        # -------------------------------------------------------------
+        # ============================================================
         # MAIN + 3 DOGONS
-        # -------------------------------------------------------------
+        # ============================================================
+
+        checked_games = []
 
         waiting = False
-        checked_games = []
 
         for dogon in range(
             0,
@@ -1834,7 +2290,7 @@ def check_predictions():
 
             game_number = add_game_offset(
                 target,
-                dogon,
+                dogon
             )
 
             game = games_cache.get(
@@ -1845,41 +2301,36 @@ def check_predictions():
 
                 waiting = True
 
-                print(
-                    f"⏳ #N{target}: "
-                    f"ждём #N{game_number} "
-                    f"(догон {dogon})",
-                    flush=True,
-                )
-
                 break
 
             checked_games.append(
                 game_number
             )
 
-            found_card = check_prediction_suit(
-                game,
-                prediction,
+            found_card = (
+                check_prediction_suit(
+                    game,
+                    prediction
+                )
             )
 
             if found_card:
 
-                prediction["status"] = (
-                    "win"
-                )
+                prediction[
+                    "status"
+                ] = "win"
 
-                prediction["result_game"] = (
-                    game_number
-                )
+                prediction[
+                    "result_game"
+                ] = game_number
 
-                prediction["found_card"] = (
-                    found_card
-                )
+                prediction[
+                    "found_card"
+                ] = found_card
 
-                prediction["dogon"] = (
-                    dogon
-                )
+                prediction[
+                    "dogon"
+                ] = dogon
 
                 telegram_edit(
                     prediction.get(
@@ -1887,7 +2338,7 @@ def check_predictions():
                     ),
                     make_result_message(
                         prediction,
-                        "win",
+                        "win"
                     ),
                 )
 
@@ -1912,7 +2363,8 @@ def check_predictions():
                 )
 
                 print(
-                    f"🔄 Догон: {dogon}",
+                    f"🔄 Догон: "
+                    f"{dogon}",
                     flush=True,
                 )
 
@@ -1922,27 +2374,24 @@ def check_predictions():
 
         else:
 
-            # ---------------------------------------------------------
-            # Все 4 игры существуют,
-            # масть нигде не найдена
-            # ---------------------------------------------------------
+            prediction[
+                "status"
+            ] = "lose"
 
-            prediction["status"] = (
-                "lose"
-            )
-
-            prediction["result_game"] = (
+            prediction[
+                "result_game"
+            ] = (
                 checked_games[-1]
                 if checked_games
                 else add_game_offset(
                     target,
-                    DOGON_GAMES,
+                    DOGON_GAMES
                 )
             )
 
-            prediction["dogon"] = (
-                DOGON_GAMES
-            )
+            prediction[
+                "dogon"
+            ] = DOGON_GAMES
 
             telegram_edit(
                 prediction.get(
@@ -1950,7 +2399,7 @@ def check_predictions():
                 ),
                 make_result_message(
                     prediction,
-                    "lose",
+                    "lose"
                 ),
             )
 
@@ -1996,7 +2445,7 @@ def finalize_pending_games():
 
         first_seen = info.get(
             "first_seen",
-            now,
+            now
         )
 
         if (
@@ -2012,7 +2461,7 @@ def finalize_pending_games():
 
         info = pending_games.pop(
             game_number,
-            None,
+            None
         )
 
         if not info:
@@ -2020,7 +2469,7 @@ def finalize_pending_games():
 
         text = info.get(
             "text",
-            "",
+            ""
         )
 
         game = parse_game_message(
@@ -2041,17 +2490,24 @@ def finalize_pending_games():
             game_number
         ] = game
 
-        log_game(game)
+        log_game(
+            game
+        )
 
-        # -------------------------------------------------------------
-        # Проверяем паттерны.
+        # ============================================================
+        # ВАЖНО:
         #
-        # Важно:
-        # паттерн G1/G2/G3 проверяется начиная
-        # с этой игры как G1.
-        # -------------------------------------------------------------
+        # Если сейчас пришла #N1384,
+        # проверяется:
+        #
+        # G1=#N1382
+        # G2=#N1383
+        # G3=#N1384
+        #
+        # а прогноз будет #N1385.
+        # ============================================================
 
-        create_predictions_for_game(
+        check_patterns_ending_with(
             game_number
         )
 
@@ -2079,6 +2535,16 @@ def update_existing_game(
     print(
         f"🔄 Обновлена #N{game_number}",
         flush=True,
+    )
+
+    # ---------------------------------------------------------------
+    # Если это была отредактированная
+    # последняя игра паттерна —
+    # повторно проверяем паттерны.
+    # ---------------------------------------------------------------
+
+    check_patterns_ending_with(
+        game_number
     )
 
 
@@ -2167,13 +2633,14 @@ def process_telegram_updates(
                 )
             )
 
-            # ---------------------------------------------------------
-            # Теперь принимаем игры ТОЛЬКО из CHANNEL_STATS
-            # ---------------------------------------------------------
+            # ========================================================
+            # ИГРЫ ТОЛЬКО ИЗ CHANNEL_STATS
+            # ========================================================
 
             if chat_id != str(
                 CHANNEL_STATS
             ):
+
                 continue
 
             text = post.get(
@@ -2196,12 +2663,14 @@ def process_telegram_updates(
                 number_match.group(1)
             )
 
-            # ---------------------------------------------------------
-            # Если игра уже была в ожидании —
-            # обновляем её свежим сообщением
-            # ---------------------------------------------------------
+            # ========================================================
+            # УЖЕ ОЖИДАЕТСЯ
+            # ========================================================
 
-            if game_number in pending_games:
+            if (
+                game_number
+                in pending_games
+            ):
 
                 pending_games[
                     game_number
@@ -2216,27 +2685,29 @@ def process_telegram_updates(
 
                 continue
 
-            # ---------------------------------------------------------
-            # Если игра уже была полностью сохранена,
-            # обновляем её при edited_channel_post
-            # ---------------------------------------------------------
+            # ========================================================
+            # УЖЕ СОХРАНЕНА
+            # ========================================================
 
-            if game_number in games_cache:
+            if (
+                game_number
+                in games_cache
+            ):
 
                 update_existing_game(
                     game_number,
-                    text,
+                    text
                 )
 
                 continue
 
-            # ---------------------------------------------------------
-            # Начинаем ждать финальную версию игры
-            # ---------------------------------------------------------
+            # ========================================================
+            # ЖДЁМ ФИНАЛЬНУЮ ВЕРСИЮ
+            # ========================================================
 
             if re.search(
                 r"[✅🔰]",
-                text,
+                text
             ):
 
                 pending_games[
@@ -2277,7 +2748,11 @@ def process_telegram_updates(
 
 def cleanup_games_cache():
 
-    if len(games_cache) <= MAX_GAMES_CACHE:
+    if (
+        len(games_cache)
+        <= MAX_GAMES_CACHE
+    ):
+
         return
 
     numbers = sorted(
@@ -2293,22 +2768,29 @@ def cleanup_games_cache():
     ):
 
         if number not in keep:
-            del games_cache[number]
+
+            del games_cache[
+                number
+            ]
 
 
 def cleanup_predictions():
 
     global predictions
 
-    if len(predictions) > 2000:
+    if len(
+        predictions
+    ) > 2000:
 
-        predictions = predictions[-2000:]
+        predictions = (
+            predictions[-2000:]
+        )
 
         save_predictions()
 
 
 # =====================================================================
-# STARTUP PATTERN INFO
+# STARTUP INFO
 # =====================================================================
 
 def print_pattern_info():
@@ -2331,22 +2813,26 @@ def print_pattern_info():
     )
 
     print(
-        f"📂 Файл: {PATTERNS_FILE}",
+        f"📂 Файл: "
+        f"{PATTERNS_FILE}",
         flush=True,
     )
 
     print(
-        f"🧠 Паттернов: {len(patterns)}",
+        f"🧠 Паттернов: "
+        f"{len(patterns)}",
         flush=True,
     )
 
     print(
-        f"🔄 Догонов: {DOGON_GAMES}",
+        f"🔄 Догонов: "
+        f"{DOGON_GAMES}",
         flush=True,
     )
 
     print(
-        "🎯 Результат: только масть игрока",
+        "🎯 Результат: "
+        "только масть игрока",
         flush=True,
     )
 
@@ -2404,7 +2890,8 @@ def main():
     )
 
     print(
-        "🎯 Проверка: масть игрока",
+        "🎯 Проверка: "
+        "масть игрока",
         flush=True,
     )
 
@@ -2413,9 +2900,17 @@ def main():
         flush=True,
     )
 
-    # ---------------------------------------------------------------
+    # ================================================================
+    # САМОЕ ВАЖНОЕ:
+    #
+    # Удаляем webhook перед getUpdates.
+    # ================================================================
+
+    delete_webhook()
+
+    # ================================================================
     # LOAD
-    # ---------------------------------------------------------------
+    # ================================================================
 
     load_patterns()
 
@@ -2437,9 +2932,9 @@ def main():
         flush=True,
     )
 
-    # ---------------------------------------------------------------
-    # восстанавливаем ключи старых прогнозов
-    # ---------------------------------------------------------------
+    # ================================================================
+    # ВОССТАНОВЛЕНИЕ КЛЮЧЕЙ
+    # ================================================================
 
     for prediction in predictions:
 
@@ -2449,6 +2944,7 @@ def main():
             "pending",
             "win",
         ):
+
             continue
 
         trigger = prediction.get(
@@ -2484,9 +2980,19 @@ def main():
         flush=True,
     )
 
-    # ---------------------------------------------------------------
+    print(
+        "🟢 БОТ ГОТОВ",
+        flush=True,
+    )
+
+    print(
+        "==================================================",
+        flush=True,
+    )
+
+    # ================================================================
     # MAIN LOOP
-    # ---------------------------------------------------------------
+    # ================================================================
 
     while True:
 
