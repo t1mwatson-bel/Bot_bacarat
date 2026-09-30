@@ -877,7 +877,7 @@ def update_existing_game(game_number, text):
 def process_telegram_updates(offset):
     try:
         response = SESSION.get(
-            f"{TELEGRAM_API(r}/getUpdates",
+            f"{TELEGRAM_API}/getUpdates"
             params={
                 "offset": offset,
                 "timeout": 3,
