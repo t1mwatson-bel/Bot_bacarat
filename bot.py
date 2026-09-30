@@ -894,7 +894,7 @@ def finalize_pending_games():
             f"📝 RAW TEXT #N{game_number}:",
             flush=True,
         )
-            print(f"{ascii(text)}", flush=True)
+        print(f"{ascii(text)}", flush=True)
         print("─" * 50, flush=True)
 
         game = parse_game_message(text)
