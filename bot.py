@@ -6,7 +6,7 @@ import time
 import requests
 import pytz
 
-from datetime import datetime, timedelta
+from datetime import datetime, time as dtime, timedelta
 
 
 # =====================================================================
@@ -56,10 +56,148 @@ TARGET_OFFSET = 10
 
 GAME_CYCLE = 1440
 
-# Таймаут: если прогноз не проверился за это время — закрываем как void
 PREDICTION_TIMEOUT_HOURS = 6
 
-MAX_GAMES_CACHE = 500
+# ⚠️ УВЕЛИЧЕНО: чтобы игры для проверки не удалялись
+MAX_GAMES_CACHE = 3000
+
+
+# =====================================================================
+# РАСПИСАНИЕ СНА
+# =====================================================================
+# Сон: с 23:00 до 09:00 (по Москве).
+# Последний прогноз создаётся до 22:30, чтобы до 23:00
+# бот успел проверить его.
+# Ночная очистка кэша: в 03:00.
+
+SLEEP_HOUR = 23
+SLEEP_MINUTE = 0
+
+WAKE_HOUR = 9
+WAKE_MINUTE = 0
+
+# Последний прогноз — до 22:30
+LAST_PREDICTION_HOUR = 22
+LAST_PREDICTION_MINUTE = 30
+
+# Ночная очистка
+CLEANUP_HOUR = 3
+CLEANUP_MINUTE = 0
+
+last_cleanup_date = None
+
+
+def is_sleep_time(now=None):
+    """Сон: с 23:00 до 09:00 (по Москве)."""
+
+    if now is None:
+        now = datetime.now(MOSCOW_TZ)
+
+    current = now.time()
+    sleep_start = dtime(SLEEP_HOUR, SLEEP_MINUTE)
+    wake_start = dtime(WAKE_HOUR, WAKE_MINUTE)
+
+    if sleep_start <= current or current < wake_start:
+        return True
+
+    return False
+
+
+def is_last_prediction_time(now=None):
+    """
+    Проверяет, наступило ли время, после которого
+    новые прогнозы НЕ создаются (22:30).
+    """
+
+    if now is None:
+        now = datetime.now(MOSCOW_TZ)
+
+    current = now.time()
+    cutoff = dtime(LAST_PREDICTION_HOUR, LAST_PREDICTION_MINUTE)
+    sleep_start = dtime(SLEEP_HOUR, SLEEP_MINUTE)
+
+    # После 22:30 и до 23:00 — прогнозы не создаём
+    if cutoff <= current < sleep_start:
+        return True
+
+    return False
+
+
+def should_cleanup_now(now=None):
+    """Ночная очистка (03:00)."""
+
+    global last_cleanup_date
+
+    if now is None:
+        now = datetime.now(MOSCOW_TZ)
+
+    if last_cleanup_date == now.date():
+        return False
+
+    cleanup_time = dtime(CLEANUP_HOUR, CLEANUP_MINUTE)
+
+    if now.time() >= cleanup_time:
+        return True
+
+    return False
+
+
+def cleanup_nightly():
+    """
+    Ночная очистка в 03:00.
+
+    Чистит:
+      - games_cache
+      - pending_games
+      - processed_trigger_keys
+
+    Прогнозы:
+      - pending → expired (не удаляются — для статистики)
+    """
+
+    global games_cache, pending_games, processed_trigger_keys
+    global predictions, last_cleanup_date
+
+    now = datetime.now(MOSCOW_TZ)
+
+    print("", flush=True)
+    print("🧹 НОЧНАЯ ОЧИСТКА (03:00)", flush=True)
+
+    games_count = len(games_cache)
+    games_cache.clear()
+    print(f"   🗑️ games_cache: удалено {games_count} игр", flush=True)
+
+    pending_count = len(pending_games)
+    pending_games.clear()
+    print(f"   🗑️ pending_games: удалено {pending_count}", flush=True)
+
+    triggers_count = len(processed_trigger_keys)
+    processed_trigger_keys.clear()
+    print(
+        f"   🗑️ processed_trigger_keys: удалено {triggers_count}",
+        flush=True,
+    )
+
+    expired_count = 0
+    for p in predictions:
+        if p.get("status") == "pending":
+            p["status"] = "expired"
+            p["closed_at"] = now.isoformat()
+            p["close_reason"] = "nightly_cleanup"
+            expired_count += 1
+
+    if expired_count:
+        save_predictions()
+
+    print(
+        f"   🗑️ predictions: pending → expired — {expired_count}",
+        flush=True,
+    )
+
+    last_cleanup_date = now.date()
+
+    print("✅ Ночная очистка завершена", flush=True)
+    print("", flush=True)
 
 
 # =====================================================================
@@ -147,6 +285,7 @@ def normalize_suit(suit):
 # =====================================================================
 # RANK
 # =====================================================================
+# ⚠️ ИСПРАВЛЕНО: добавлены карты 2, 3, 4, 5
 
 def normalize_rank(rank):
     if rank is None:
@@ -158,6 +297,7 @@ def normalize_rank(rank):
         rank = "A"
 
     if rank in {
+        "2", "3", "4", "5",
         "6", "7", "8", "9", "10",
         "J", "Q", "K", "A",
     }:
@@ -191,10 +331,13 @@ def cards_to_text(cards):
 
 
 # =====================================================================
-# CYBER 21 SCORE
+# SCORE
 # =====================================================================
+# ⚠️ ИСПРАВЛЕНО: добавлены карты 2, 3, 4, 5
+# (для Cyber 21: J=2, Q=3, K=4, A=11)
 
 CARD_VALUES = {
+    "2": 2, "3": 3, "4": 4, "5": 5,
     "6": 6, "7": 7, "8": 8, "9": 9, "10": 10,
     "J": 2, "Q": 3, "K": 4, "A": 11,
 }
@@ -214,9 +357,10 @@ def cyber21_score(cards):
 # =====================================================================
 # PARSE CARDS
 # =====================================================================
+# ⚠️ ИСПРАВЛЕНО: [6-9AJQK] → [2-9AJQK]
 
 CARD_RE = re.compile(
-    r"(10|[6-9AJQK])\s*"
+    r"(10|[2-9AJQK])\s*"
     r"(\u2660|\u2663|\u2666|\u2665)"
     r"\ufe0f?"
 )
@@ -484,13 +628,6 @@ def add_game_offset(number, offset):
 # =====================================================================
 
 def get_trigger_suit(game):
-    """
-    Триггер: первая карта игрока.
-
-    Возвращает масть первой карты игрока или None,
-    если игра не подходит.
-    """
-
     player = game.get("player_cards", [])
 
     if not player:
@@ -516,15 +653,11 @@ def get_predicted_suit(trigger_suit):
 
 
 # =====================================================================
-# НОВОЕ: ПРОВЕРКА НА ЗАДВОЕНИЕ
+# ПРАВИЛА ПРОПУСКА
 # =====================================================================
 
 def has_double_signal(game):
-    """
-    Правило 2: первая и вторая карты игрока одинаковые по масти.
-
-    Если у игрока меньше 2 карт — правило не срабатывает.
-    """
+    """Правило 2: первая и вторая карты игрока одинаковые."""
 
     player = game.get("player_cards", [])
 
@@ -541,10 +674,7 @@ def has_double_signal(game):
 
 
 def has_predicted_suit_in_trigger(game, predicted_suit):
-    """
-    Правило 1: прогнозируемая масть уже есть у игрока
-    в триггерной игре.
-    """
+    """Правило 1: прогнозируемая масть уже есть у игрока."""
 
     player = game.get("player_cards", [])
 
@@ -560,18 +690,6 @@ def has_predicted_suit_in_trigger(game, predicted_suit):
 # =====================================================================
 
 def create_prediction(game):
-    """
-    Создаёт прогноз по триггеру:
-      - первая карта игрока = X
-      - прогноз: SUIT_PAIRS[X]
-      - целевая: game_number + 10
-      - догоны: +11, +12, +13
-
-    ПРАВИЛА ПРОПУСКА:
-      1. Если у игрока уже есть прогнозируемая масть → пропуск.
-      2. Если первая и вторая карта игрока одинаковые → пропуск.
-    """
-
     trigger_suit = get_trigger_suit(game)
 
     if not trigger_suit:
@@ -582,10 +700,7 @@ def create_prediction(game):
     if not predicted_suit:
         return None
 
-    # ============================================================
-    # ПРАВИЛО 2: задвоенный сигнал (первая и вторая одинаковые)
-    # ============================================================
-
+    # Правило 2: задвоение
     if has_double_signal(game):
         print(
             f"⏭️ Пропуск #N{game['game_number']}: "
@@ -594,10 +709,7 @@ def create_prediction(game):
         )
         return None
 
-    # ============================================================
-    # ПРАВИЛО 1: прогнозируемая масть уже есть у игрока
-    # ============================================================
-
+    # Правило 1: прогнозируемая масть уже есть
     if has_predicted_suit_in_trigger(game, predicted_suit):
         print(
             f"⏭️ Пропуск #N{game['game_number']}: "
@@ -758,10 +870,7 @@ def check_predictions():
         if not target:
             continue
 
-        # ============================================================
         # TIMEOUT
-        # ============================================================
-
         sent_at_str = prediction.get("sent_at")
 
         if sent_at_str:
@@ -791,10 +900,7 @@ def check_predictions():
             except Exception:
                 pass
 
-        # ============================================================
         # ЦЕЛЕВАЯ + 3 ДОГОНА
-        # ============================================================
-
         checked_games = []
         waiting = False
 
@@ -883,20 +989,6 @@ def finalize_pending_games():
             continue
 
         text = info.get("text", "")
-
-        # ============================================================
-        # ОТЛАДКА: показываем точный текст, который пришёл от Telegram
-        # ============================================================
-
-        print("", flush=True)
-        print("─" * 50, flush=True)
-        print(
-            f"📝 RAW TEXT #N{game_number}:",
-            flush=True,
-        )
-        print(f"{ascii(text)}", flush=True)
-        print("─" * 50, flush=True)
-
         game = parse_game_message(text)
 
         if not game:
@@ -906,36 +998,25 @@ def finalize_pending_games():
             )
             continue
 
-        # ============================================================
-        # ОТЛАДКА: что распарсилось
-        # ============================================================
-
-        print(
-            f"🃏 PARSED #N{game_number}:",
-            flush=True,
-        )
-        print(
-            f"   player_cards = "
-            f"{[card_to_text(c) for c in game['player_cards']]}",
-            flush=True,
-        )
-        print(
-            f"   dealer_cards = "
-            f"{[card_to_text(c) for c in game['dealer_cards']]}",
-            flush=True,
-        )
-        print(
-            f"   player_score = {game['player_score']}",
-            flush=True,
-        )
-        print(
-            f"   dealer_score = {game['dealer_score']}",
-            flush=True,
-        )
-
         games_cache[game_number] = game
 
         log_game(game)
+
+        # Если сейчас ночь — прогноз не создаём
+        if is_sleep_time():
+            print(
+                f"😴 #N{game_number}: сон — прогноз не создаём",
+                flush=True,
+            )
+            continue
+
+        # Если после 22:30 — прогноз не создаём
+        if is_last_prediction_time():
+            print(
+                f"🌙 #N{game_number}: после 22:30 — прогноз не создаём",
+                flush=True,
+            )
+            continue
 
         create_prediction(game)
 
@@ -1004,10 +1085,6 @@ def process_telegram_updates(offset):
 
             text = post.get("text", "")
 
-            # ============================================================
-            # ФИЛЬТР КАНАЛА — только наш, без логов о чужих
-            # ============================================================
-
             if chat_id != str(CHANNEL_STATS):
                 continue
 
@@ -1021,7 +1098,6 @@ def process_telegram_updates(offset):
 
             game_number = int(number_match.group(1))
 
-            # Уже ожидает
             if game_number in pending_games:
                 pending_games[game_number]["text"] = text
 
@@ -1031,12 +1107,10 @@ def process_telegram_updates(offset):
                 )
                 continue
 
-            # Уже сохранена
             if game_number in games_cache:
                 update_existing_game(game_number, text)
                 continue
 
-            # Фильтр ✅/🔰
             has_marker = bool(re.search(r"[✅🔰▶️◀️]", text))
 
             if has_marker:
@@ -1064,12 +1138,13 @@ def cleanup_games_cache():
     if len(games_cache) <= MAX_GAMES_CACHE:
         return
 
-    numbers = sorted(games_cache.keys())
-    keep = set(numbers[-MAX_GAMES_CACHE:])
+    items = sorted(
+        games_cache.items(),
+        key=lambda kv: kv[1].get("received_at", ""),
+    )
 
-    for number in list(games_cache.keys()):
-        if number not in keep:
-            del games_cache[number]
+    for number, _ in items[:-MAX_GAMES_CACHE]:
+        del games_cache[number]
 
 
 def cleanup_predictions():
@@ -1097,6 +1172,7 @@ def main():
     print(f"🔄 Догоны: {DOGON_GAMES}", flush=True)
     print(f"🎯 Сдвиг цели: +{TARGET_OFFSET}", flush=True)
     print(f"⏰ Таймаут прогноза: {PREDICTION_TIMEOUT_HOURS} ч", flush=True)
+    print(f"💾 MAX_GAMES_CACHE: {MAX_GAMES_CACHE}", flush=True)
     print("🎯 Пары мастей:", flush=True)
 
     for trigger, target in SUIT_PAIRS.items():
@@ -1105,6 +1181,24 @@ def main():
     print("🎯 Правила пропуска:", flush=True)
     print("   1. Прогнозируемая масть уже есть у игрока", flush=True)
     print("   2. Первая и вторая карта игрока одинаковые", flush=True)
+
+    print("", flush=True)
+    print("⏰ Расписание:", flush=True)
+    print(
+        f"   😴 Сон: {SLEEP_HOUR:02d}:{SLEEP_MINUTE:02d} — "
+        f"{WAKE_HOUR:02d}:{WAKE_MINUTE:02d}",
+        flush=True,
+    )
+    print(
+        f"   🌙 Последний прогноз до: "
+        f"{LAST_PREDICTION_HOUR:02d}:{LAST_PREDICTION_MINUTE:02d}",
+        flush=True,
+    )
+    print(
+        f"   🧹 Ночная очистка: "
+        f"{CLEANUP_HOUR:02d}:{CLEANUP_MINUTE:02d}",
+        flush=True,
+    )
     print("==================================================", flush=True)
 
     delete_webhook()
@@ -1136,6 +1230,10 @@ def main():
 
     while True:
         try:
+            # Ночная очистка в 03:00
+            if should_cleanup_now():
+                cleanup_nightly()
+
             telegram_offset = process_telegram_updates(telegram_offset)
             finalize_pending_games()
             check_predictions()
