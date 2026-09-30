@@ -52,28 +52,18 @@ FINALIZE_WAIT_SECONDS = 30
 
 DOGON_GAMES = 3
 
-# Сдвиг целевой игры: ровно +10 от триггерной
 TARGET_OFFSET = 10
 
-# Цикл нумерации игр: 1440
 GAME_CYCLE = 1440
 
-PREDICTION_TIMEOUT_HOURS = 24
+# Таймаут: если прогноз не проверился за это время — закрываем как void
+PREDICTION_TIMEOUT_HOURS = 6
 
 MAX_GAMES_CACHE = 500
 
 
 # =====================================================================
 # ПАРЫ МАСТЕЙ
-# =====================================================================
-#
-# Триггер (первая карта игрока) → прогноз (масть, которую ищем у игрока)
-#
-#   ♥️ → ♣️
-#   ♦️ → ♠️
-#   ♣️ → ♥️
-#   ♠️ → ♦️
-#
 # =====================================================================
 
 SUIT_PAIRS = {
@@ -498,7 +488,7 @@ def get_trigger_suit(game):
     Триггер: первая карта игрока.
 
     Возвращает масть первой карты игрока или None,
-    если масть не входит в SUIT_PAIRS или игра не подходит.
+    если игра не подходит.
     """
 
     player = game.get("player_cards", [])
@@ -506,7 +496,6 @@ def get_trigger_suit(game):
     if not player:
         return None
 
-    # #O — очко (21). Такие игры не идут в триггер.
     if game.get("is_ochko"):
         return None
 
@@ -527,6 +516,46 @@ def get_predicted_suit(trigger_suit):
 
 
 # =====================================================================
+# НОВОЕ: ПРОВЕРКА НА ЗАДВОЕНИЕ
+# =====================================================================
+
+def has_double_signal(game):
+    """
+    Правило 2: первая и вторая карты игрока одинаковые по масти.
+
+    Если у игрока меньше 2 карт — правило не срабатывает.
+    """
+
+    player = game.get("player_cards", [])
+
+    if len(player) < 2:
+        return False
+
+    first_suit = normalize_suit(player[0].get("suit"))
+    second_suit = normalize_suit(player[1].get("suit"))
+
+    if not first_suit or not second_suit:
+        return False
+
+    return first_suit == second_suit
+
+
+def has_predicted_suit_in_trigger(game, predicted_suit):
+    """
+    Правило 1: прогнозируемая масть уже есть у игрока
+    в триггерной игре.
+    """
+
+    player = game.get("player_cards", [])
+
+    for card in player:
+        if normalize_suit(card.get("suit")) == predicted_suit:
+            return True
+
+    return False
+
+
+# =====================================================================
 # CREATE PREDICTION
 # =====================================================================
 
@@ -537,6 +566,10 @@ def create_prediction(game):
       - прогноз: SUIT_PAIRS[X]
       - целевая: game_number + 10
       - догоны: +11, +12, +13
+
+    ПРАВИЛА ПРОПУСКА:
+      1. Если у игрока уже есть прогнозируемая масть → пропуск.
+      2. Если первая и вторая карта игрока одинаковые → пропуск.
     """
 
     trigger_suit = get_trigger_suit(game)
@@ -549,18 +582,40 @@ def create_prediction(game):
     if not predicted_suit:
         return None
 
+    # ============================================================
+    # ПРАВИЛО 2: задвоенный сигнал (первая и вторая одинаковые)
+    # ============================================================
+
+    if has_double_signal(game):
+        print(
+            f"⏭️ Пропуск #N{game['game_number']}: "
+            f"задвоенный сигнал ({trigger_suit}{trigger_suit})",
+            flush=True,
+        )
+        return None
+
+    # ============================================================
+    # ПРАВИЛО 1: прогнозируемая масть уже есть у игрока
+    # ============================================================
+
+    if has_predicted_suit_in_trigger(game, predicted_suit):
+        print(
+            f"⏭️ Пропуск #N{game['game_number']}: "
+            f"у игрока уже есть {predicted_suit}",
+            flush=True,
+        )
+        return None
+
     trigger_number = game["game_number"]
     trigger_id = game.get("game_id")
 
     target_number = add_game_offset(trigger_number, TARGET_OFFSET)
 
-    # Ключ — по ID триггерной игры (уникальный), с фолбэком на номер
     trigger_key = (trigger_id or trigger_number, predicted_suit)
 
     if trigger_key in processed_trigger_keys:
         return None
 
-    # Проверяем, нет ли уже прогноза на эту цель с той же мастью
     for old in predictions:
         if old.get("status") not in ("pending", "win"):
             continue
@@ -602,7 +657,6 @@ def create_prediction(game):
 
     print("", flush=True)
     print("🔮 ПРОГНОЗ СОЗДАН", flush=True)
-    print(f"🧠 Алгоритм: suit_pair", flush=True)
     print(f"📌 Триггер: #N{trigger_number} ({trigger_suit})", flush=True)
     print(f"🎯 Цель: #N{target_number}", flush=True)
     print(f"🃏 Масть: {predicted_suit}", flush=True)
@@ -669,11 +723,6 @@ def send_prediction(prediction):
 # =====================================================================
 
 def check_prediction_suit(game, prediction):
-    """
-    Проверяем только карты игрока.
-    Ищем любую карту с предсказанной мастью.
-    """
-
     target_suit = normalize_suit(prediction.get("predicted_suit"))
 
     if not target_suit:
@@ -724,6 +773,7 @@ def check_predictions():
                     > timedelta(hours=PREDICTION_TIMEOUT_HOURS)
                 ):
                     prediction["status"] = "void"
+                    prediction["close_reason"] = "timeout"
 
                     telegram_edit(
                         prediction.get("message_id"),
@@ -804,10 +854,6 @@ def check_predictions():
                 f"🎯 Масть: {prediction['predicted_suit']}",
                 flush=True,
             )
-            print(
-                f"🔄 Проверено: {DOGON_GAMES + 1} игр",
-                flush=True,
-            )
 
             changed = True
 
@@ -842,8 +888,7 @@ def finalize_pending_games():
         if not game:
             print(
                 f"⚠️ #N{game_number} не удалось разобрать",
-                flush=True
-,
+                flush=True,
             )
             continue
 
@@ -851,7 +896,6 @@ def finalize_pending_games():
 
         log_game(game)
 
-        # Создаём прогноз по триггеру (если есть)
         create_prediction(game)
 
 
@@ -871,7 +915,7 @@ def update_existing_game(game_number, text):
 
 
 # =====================================================================
-# TELEGRAM UPD           ATES
+# TELEGRAM UPDATES
 # =====================================================================
 
 def process_telegram_updates(offset):
@@ -898,16 +942,6 @@ def process_telegram_updates(offset):
 
         updates = data.get("result", [])
 
-        # ============================================================
-        # ОТЛАДКА: сколько апдейтов пришло
-        # ============================================================
-
-        if updates:
-            print(
-                f"📥 getUpdates: получено апдейтов = {len(updates)}",
-                flush=True,
-            )
-
         for update in updates:
 
             update_id = update.get("update_id")
@@ -922,80 +956,36 @@ def process_telegram_updates(offset):
             )
 
             if not post:
-                print(
-                    f"⚠️ Апдейт {update_id}: нет channel_post",
-                    flush=True,
-                )
                 continue
 
             chat = post.get("chat", {})
             chat_id = str(chat.get("id", ""))
-            chat_title = chat.get("title", "")
 
             text = post.get("text", "")
 
             # ============================================================
-            # ОТЛАДКА: показываем каждый пост
-            # ============================================================
-
-            print("", flush=True)
-            print("─" * 50, flush=True)
-            print(
-                f"📨 ПОСТ: chat_id={chat_id} "
-                f"title={chat_title}",
-                flush=True,
-            )
-            print(
-                f"   ожидаем CHANNEL_STATS={CHANNEL_STATS}",
-                flush=True,
-            )
-            print(
-                f"   совпадает: {chat_id == str(CHANNEL_STATS)}",
-                flush=True,
-            )
-            print(f"   text[:80]={text[:80]}", flush=True)
-            print("─" * 50, flush=True)
-
-            # ============================================================
-            # ФИЛЬТР КАНАЛА
+            # ФИЛЬТР КАНАЛА — только наш, без логов о чужих
             # ============================================================
 
             if chat_id != str(CHANNEL_STATS):
-                print(
-                    f"   ⏭️ ПРОПУСК: не наш канал",
-                    flush=True,
-                )
                 continue
 
             if not text:
-                print(
-                    f"   ⏭️ ПРОПУСК: пустой text",
-                    flush=True,
-                )
                 continue
 
             number_match = re.search(r"#N(\d+)", text)
 
             if not number_match:
-                print(
-                    f"   ⏭️ ПРОПУСК: нет #N в тексте",
-                    flush=True,
-                )
                 continue
 
             game_number = int(number_match.group(1))
-
-            print(
-                f"   🎮 Игра: #N{game_number}",
-                flush=True,
-            )
 
             # Уже ожидает
             if game_number in pending_games:
                 pending_games[game_number]["text"] = text
 
                 print(
-                    f"   🔄 Обновлена pending #N{game_number}",
+                    f"🔄 Обновлена pending #N{game_number}",
                     flush=True,
                 )
                 continue
@@ -1003,19 +993,10 @@ def process_telegram_updates(offset):
             # Уже сохранена
             if game_number in games_cache:
                 update_existing_game(game_number, text)
-                print(
-                    f"   🔄 Обновлена games_cache #N{game_number}",
-                    flush=True,
-                )
                 continue
 
             # Фильтр ✅/🔰
-            has_marker = bool(re.search(r"[✅🔰]", text))
-
-            print(
-                f"   ✅🔰 маркер: {has_marker}",
-                flush=True,
-            )
+            has_marker = bool(re.search(r"[✅🔰▶️◀️]", text))
 
             if has_marker:
                 pending_games[game_number] = {
@@ -1024,12 +1005,7 @@ def process_telegram_updates(offset):
                 }
 
                 print(
-                    f"   👀 ДОБАВЛЕНА в pending #N{game_number}",
-                    flush=True,
-                )
-            else:
-                print(
-                    f"   ⏭️ ПРОПУСК: нет ✅/🔰",
+                    f"👀 #N{game_number} → pending",
                     flush=True,
                 )
 
@@ -1079,12 +1055,15 @@ def main():
     print(f"⏳ Финализация игры: {FINALIZE_WAIT_SECONDS} сек", flush=True)
     print(f"🔄 Догоны: {DOGON_GAMES}", flush=True)
     print(f"🎯 Сдвиг цели: +{TARGET_OFFSET}", flush=True)
+    print(f"⏰ Таймаут прогноза: {PREDICTION_TIMEOUT_HOURS} ч", flush=True)
     print("🎯 Пары мастей:", flush=True)
 
     for trigger, target in SUIT_PAIRS.items():
         print(f"   {trigger} → {target}", flush=True)
 
-    print("🎯 Проверка: масть игрока", flush=True)
+    print("🎯 Правила пропуска:", flush=True)
+    print("   1. Прогнозируемая масть уже есть у игрока", flush=True)
+    print("   2. Первая и вторая карта игрока одинаковые", flush=True)
     print("==================================================", flush=True)
 
     delete_webhook()
