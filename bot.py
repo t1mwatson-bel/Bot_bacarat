@@ -883,6 +883,20 @@ def finalize_pending_games():
             continue
 
         text = info.get("text", "")
+
+        # ============================================================
+        # ОТЛАДКА: показываем точный текст, который пришёл от Telegram
+        # ============================================================
+
+        print("", flush=True)
+        print("─" * 50, flush=True)
+        print(
+            f"📝 RAW TEXT #N{game_number}:",
+            flush=True,
+        )
+        print(f"{repr(text)}", flush=True)
+        print("─" * 50, flush=True)
+
         game = parse_game_message(text)
 
         if not game:
@@ -891,6 +905,33 @@ def finalize_pending_games():
                 flush=True,
             )
             continue
+
+        # ============================================================
+        # ОТЛАДКА: что распарсилось
+        # ============================================================
+
+        print(
+            f"🃏 PARSED #N{game_number}:",
+            flush=True,
+        )
+        print(
+            f"   player_cards = "
+            f"{[card_to_text(c) for c in game['player_cards']]}",
+            flush=True,
+        )
+        print(
+            f"   dealer_cards = "
+            f"{[card_to_text(c) for c in game['dealer_cards']]}",
+            flush=True,
+        )
+        print(
+            f"   player_score = {game['player_score']}",
+            flush=True,
+        )
+        print(
+            f"   dealer_score = {game['dealer_score']}",
+            flush=True,
+        )
 
         games_cache[game_number] = game
 
