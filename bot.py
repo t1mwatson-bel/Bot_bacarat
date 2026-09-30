@@ -898,6 +898,16 @@ def process_telegram_updates(offset):
 
         updates = data.get("result", [])
 
+        # ============================================================
+        # ОТЛАДКА: сколько апдейтов пришло
+        # ============================================================
+
+        if updates:
+            print(
+                f"📥 getUpdates: получено апдейтов = {len(updates)}",
+                flush=True,
+            )
+
         for update in updates:
 
             update_id = update.get("update_id")
@@ -912,32 +922,80 @@ def process_telegram_updates(offset):
             )
 
             if not post:
+                print(
+                    f"⚠️ Апдейт {update_id}: нет channel_post",
+                    flush=True,
+                )
                 continue
 
             chat = post.get("chat", {})
             chat_id = str(chat.get("id", ""))
-
-            if chat_id != str(CHANNEL_STATS):
-                continue
+            chat_title = chat.get("title", "")
 
             text = post.get("text", "")
 
+            # ============================================================
+            # ОТЛАДКА: показываем каждый пост
+            # ============================================================
+
+            print("", flush=True)
+            print("─" * 50, flush=True)
+            print(
+                f"📨 ПОСТ: chat_id={chat_id} "
+                f"title={chat_title}",
+                flush=True,
+            )
+            print(
+                f"   ожидаем CHANNEL_STATS={CHANNEL_STATS}",
+                flush=True,
+            )
+            print(
+                f"   совпадает: {chat_id == str(CHANNEL_STATS)}",
+                flush=True,
+            )
+            print(f"   text[:80]={text[:80]}", flush=True)
+            print("─" * 50, flush=True)
+
+            # ============================================================
+            # ФИЛЬТР КАНАЛА
+            # ============================================================
+
+            if chat_id != str(CHANNEL_STATS):
+                print(
+                    f"   ⏭️ ПРОПУСК: не наш канал",
+                    flush=True,
+                )
+                continue
+
             if not text:
+                print(
+                    f"   ⏭️ ПРОПУСК: пустой text",
+                    flush=True,
+                )
                 continue
 
             number_match = re.search(r"#N(\d+)", text)
 
             if not number_match:
+                print(
+                    f"   ⏭️ ПРОПУСК: нет #N в тексте",
+                    flush=True,
+                )
                 continue
 
             game_number = int(number_match.group(1))
+
+            print(
+                f"   🎮 Игра: #N{game_number}",
+                flush=True,
+            )
 
             # Уже ожидает
             if game_number in pending_games:
                 pending_games[game_number]["text"] = text
 
                 print(
-                    f"🔄 [STATS] Обновлена #N{game_number}",
+                    f"   🔄 Обновлена pending #N{game_number}",
                     flush=True,
                 )
                 continue
@@ -945,21 +1003,33 @@ def process_telegram_updates(offset):
             # Уже сохранена
             if game_number in games_cache:
                 update_existing_game(game_number, text)
+                print(
+                    f"   🔄 Обновлена games_cache #N{game_number}",
+                    flush=True,
+                )
                 continue
 
-            # Ждём финальную версию"[✅🔰]", text):
+            # Фильтр ✅/🔰
+            has_marker = bool(re.search(r"[✅🔰]", text))
+
+            print(
+                f"   ✅🔰 маркер: {has_marker}",
+                flush=True,
+            )
+
+            if has_marker:
                 pending_games[game_number] = {
                     "first_seen": time.time(),
                     "text": text,
                 }
 
-                print("", flush=True)
                 print(
-                    f"👀 [STATS] НОВАЯ ИГРА #N{game_number}",
+                    f"   👀 ДОБАВЛЕНА в pending #N{game_number}",
                     flush=True,
                 )
+            else:
                 print(
-                    f"⏳ Ждём {FINALIZE_WAIT_SECONDS} сек",
+                    f"   ⏭️ ПРОПУСК: нет ✅/🔰",
                     flush=True,
                 )
 
