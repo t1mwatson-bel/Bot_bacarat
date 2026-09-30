@@ -874,9 +874,9 @@ def update_existing_game(game_number, text):
 # TELEGRAM UPD           ATES
 # =====================================================================
 
-def if process_telegram_updates re(offset):
+def process_telegram_updates(offset):
     try:
-        response = S.searchESSION.get(
+        response = SESSION.get(
             f"{TELEGRAM_API(r}/getUpdates",
             params={
                 "offset": offset,
