@@ -659,4 +659,11 @@ def main():
 # =====================================================================
 
 if __name__ == "__main__":
-    main()
+    import threading
+
+    # Бот — в фоне
+    threading.Thread(target=main, daemon=True).start()
+
+    # Сайт — в основном потоке (ОБЯЗАТЕЛЬНО)
+    from web_server import start_web_server
+    start_web_server()
