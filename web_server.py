@@ -1,6 +1,5 @@
 import os
 import json
-import threading
 import http.server
 import socketserver
 
@@ -8,7 +7,6 @@ from datetime import datetime
 
 from config import (
     PREDICTIONS_FILE,
-    STATS_HTML_FILE,
     MOSCOW_TZ,
 )
 
@@ -22,38 +20,44 @@ def load_predictions_from_file():
         with open(PREDICTIONS_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, list) else []
-    except Exception as e:
-        print(f"⚠️ Ошибка чтения прогнозов: {e}", flush=True)
+    except Exception:
         return []
 
 
 class StatsHandler(http.server.SimpleHTTPRequestHandler):
+
     def do_GET(self):
-        # Главная страница
+
+        # Главная
         if self.path in ("/", "/index.html"):
-            if os.path.exists(STATS_HTML_FILE):
-                self.path = "/" + STATS_HTML_FILE
-                return super().do_GET()
+            for path in ("index.html", "stats.html", "templates/index.html"):
+                if os.path.exists(path):
+                    with open(path, "rb") as f:
+                        body = f.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
-            self.wfile.write("OK".encode("utf-8"))
+            self.wfile.write(b"OK - HTML not found")
             return
 
-        # API статистики
+        # API
         if self.path.startswith("/api/stats"):
             predictions = load_predictions_from_file()
             try:
                 data = get_full_stats(predictions)
             except Exception as e:
-                print(f"⚠️ Ошибка подсчёта статистики: {e}", flush=True)
-                data = {"summary": {}, "dogons": [], "suits": [], "daily": [], "last": [],
-                        "updated_at": datetime.now(MOSCOW_TZ).isoformat()}
+                data = {"error": str(e), "summary": {}, "dogons": [], "suits": [], "daily": [], "last": []}
             body = json.dumps(data, ensure_ascii=False).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
             return
@@ -70,7 +74,7 @@ class StatsHandler(http.server.SimpleHTTPRequestHandler):
 
         return super().do_GET()
 
-    def log_message(self, format, *args):
+    def log_message(self, *args):
         pass
 
 
@@ -85,7 +89,6 @@ def start_web_server():
     except Exception:
         pass
 
-    # ✅ Важно: bind на 0.0.0.0, чтобы прокси Bothost видел сервер
     with ReusableTCPServer(("0.0.0.0", port), StatsHandler) as httpd:
         print(f"🌐 Веб-сервер запущен: 0.0.0.0:{port}", flush=True)
         httpd.serve_forever()
