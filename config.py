@@ -19,6 +19,7 @@ CHANNEL_STATS = os.getenv("CHANNEL_STATS")
 PREDICTIONS_FILE = "predictions.json"
 OFFSET_FILE = "telegram_offset.txt"
 BANK_FILE = "bank.json"
+STATS_HTML_FILE = "stats.html"
 
 
 # =====================================================================
