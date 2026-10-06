@@ -83,7 +83,7 @@ class ReusableTCPServer(socketserver.ThreadingTCPServer):
 
 
 def start_web_server():
-    port = int(os.getenv("PORT", 3000))
+    port = int(os.getenv("PORT", 8000))
     try:
         os.chdir(os.path.dirname(os.path.abspath(__file__)))
     except Exception:
