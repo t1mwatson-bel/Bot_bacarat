@@ -6,22 +6,27 @@ from config import (
     CARD_VALUES,
     SUITS,
     SUIT_ALIASES,
-    DIGIT_RANKS,
     GAME_CYCLE,
-    TARGET_OFFSET,
     MOSCOW_TZ,
 )
 
 
 # =====================================================================
-# РЕГУЛЯРКА ДЛЯ КАРТ: 10 / 2-9 / A J Q K + масть
+# РЕГУЛЯРКА ДЛЯ КАРТ
 # =====================================================================
 
 CARD_RE = re.compile(
-    r"(10|[2-9AJQK])\s*"
-    r"(\u2660|\u2663|\u2666|\u2665)"
+    r"(10|[2-9AJQKA])"
+    r"(♠|♣|♦|♥)"
     r"\ufe0f?"
 )
+
+
+# =====================================================================
+# РАНГИ ДЛЯ ТРИГГЕРА
+# =====================================================================
+
+TRIGGER_RANKS = {"J", "Q", "K", "A"}
 
 
 # =====================================================================
@@ -29,8 +34,6 @@ CARD_RE = re.compile(
 # =====================================================================
 
 def normalize_suit(suit):
-    """Приводит масть к единому виду: ♠️ ♣️ ♦️ ♥️"""
-
     if suit is None:
         return None
 
@@ -45,8 +48,6 @@ def normalize_suit(suit):
 
 
 def normalize_rank(rank):
-    """Приводит ранг карты к единому виду: 2-10, J, Q, K, A."""
-
     if rank is None:
         return None
 
@@ -57,8 +58,8 @@ def normalize_rank(rank):
 
     if rank in {
         "2", "3", "4", "5",
-        "6", "7", "8", "9", "10",
-        "J", "Q", "K", "A",
+        "6", "7", "8", "9",
+        "10", "J", "Q", "K", "A",
     }:
         return rank
 
@@ -87,6 +88,7 @@ def cards_to_text(cards):
 
     for card in cards:
         value = card_to_text(card)
+
         if value:
             result.append(value)
 
@@ -98,12 +100,11 @@ def cards_to_text(cards):
 # =====================================================================
 
 def cyber21_score(cards):
-    """Считает сумму очков по правилам Cyber 21 (J=2, Q=3, K=4, A=11)."""
-
     total = 0
 
     for card in cards:
         rank = normalize_rank(card.get("rank"))
+
         if rank in CARD_VALUES:
             total += CARD_VALUES[rank]
 
@@ -111,18 +112,17 @@ def cyber21_score(cards):
 
 
 # =====================================================================
-# ПАРСИНГ КАРТ ИЗ ТЕКСТА
+# ПАРСИНГ КАРТ
 # =====================================================================
 
 def parse_cards(text):
-    """Извлекает все карты из строки."""
-
     result = []
 
     if not text:
         return result
 
     for match in CARD_RE.finditer(text):
+
         rank = normalize_rank(match.group(1))
         suit = normalize_suit(match.group(2))
 
@@ -138,32 +138,22 @@ def parse_cards(text):
 
 
 # =====================================================================
-# ПАРСИНГ ИГРОВОГО СООБЩЕНИЯ
+# ПАРСИНГ ИГРЫ
 # =====================================================================
 
 def parse_game_message(text):
-    """
-    Разбирает сообщение вида:
-    #N1411 ✅9 (5♣️K♥️4♥️) - 7 (10♥️7♣️) #П1 #T16 (ID: 758978530)
-
-    Возвращает dict с полями:
-      game_number, game_id,
-      player_cards, dealer_cards,
-      player_score, dealer_score,
-      is_draw, is_ochko, is_r,
-      raw_text, received_at
-    """
-
     if not text:
         return None
 
     number_match = re.search(r"#N(\d+)", text)
+
     if not number_match:
         return None
 
     game_number = int(number_match.group(1))
 
     groups = re.findall(r"\(([^()]*)\)", text)
+
     if len(groups) < 2:
         return None
 
@@ -184,6 +174,7 @@ def parse_game_message(text):
 
     is_draw = bool(re.search(r"#X\b", text))
     is_ochko = bool(re.search(r"#O\b", text))
+    is_finished = bool(re.search(r"✅", text))
     is_r = bool(re.search(r"#R\b", text))
 
     return {
@@ -198,6 +189,7 @@ def parse_game_message(text):
 
         "is_draw": is_draw,
         "is_ochko": is_ochko,
+        "is_finished": is_finished,
         "is_r": is_r,
 
         "raw_text": text,
@@ -207,10 +199,11 @@ def parse_game_message(text):
 
 
 # =====================================================================
-# ЛОГ ИГРЫ (вывод в консоль)
+# ЛОГ ИГРЫ
 # =====================================================================
 
 def log_game(game):
+
     player = game.get("player_cards", [])
     dealer = game.get("dealer_cards", [])
 
@@ -237,6 +230,9 @@ def log_game(game):
     if game.get("is_r"):
         print("⚠️ #R — АНОМАЛИЯ", flush=True)
 
+    if game.get("is_finished"):
+        print("✅ — ИГРА ЗАВЕРШЕНА", flush=True)
+
     print("────────────────────────────────────", flush=True)
 
 
@@ -245,79 +241,87 @@ def log_game(game):
 # =====================================================================
 
 def add_game_offset(number, offset):
-    """Прибавляет сдвиг к номеру игры с учётом цикла."""
-
     return ((int(number) - 1 + int(offset)) % GAME_CYCLE) + 1
 
 
 # =====================================================================
-# ТРИГГЕР: 3 КАРТЫ ИГРОКА, 1-Я И 3-Я ЦИФРЫ, 1-Я > 3-Я
+# ПОЛУЧЕНИЕ ПЕРВОЙ КАРТЫ
 # =====================================================================
 
-def find_trigger(game):
-    """
-    Проверяет, есть ли триггер в игре.
+def get_first_player_card(game):
+    player = game.get("player_cards", [])
+    if not player:
+        return None
+    return player[0]
 
-    Условия:
-      - у игрока ровно 3 карты
-      - 1-я карта — цифра 2..9
-      - 3-я карта — цифра 2..9
-      - 1-я карта СТАРШЕ 3-й (по номиналу)
 
-    Возвращает dict {'trigger_card', 'third_card', 'predicted_suit'} или None.
-    """
+def get_first_player_rank(game):
+    card = get_first_player_card(game)
+    if not card:
+        return None
+    return normalize_rank(card.get("rank"))
 
+
+# =====================================================================
+# ТРИГГЕР 21
+# =====================================================================
+
+def find_trigger_21(game):
+    # 1. Игра завершена
+    if not game.get("is_finished"):
+        return None
+
+    # 2. У игрока 3-5 карт
     player = game.get("player_cards", [])
 
-    if len(player) != 3:
+    if len(player) < 3 or len(player) > 5:
         return None
 
-    first = player[0]
-    third = player[2]
+    # 3. У дилера 0 карт
+    dealer = game.get("dealer_cards", [])
 
-    first_rank = normalize_rank(first.get("rank"))
-    third_rank = normalize_rank(third.get("rank"))
-
-    # Обе карты должны быть цифрами 2..9
-    if first_rank not in DIGIT_RANKS:
+    if len(dealer) != 0:
         return None
 
-    if third_rank not in DIGIT_RANKS:
+    # 4. Нет очка
+    if game.get("is_ochko"):
         return None
 
-    # Первая должна быть СТАРШЕ третьей
-    if int(first_rank) <= int(third_rank):
+    # 5. Первая карта — J/Q/K/A
+    first_rank = get_first_player_rank(game)
+
+    if first_rank not in TRIGGER_RANKS:
         return None
 
-    predicted_suit = normalize_suit(third.get("suit"))
-
-    if not predicted_suit:
-        return None
+    first_card = get_first_player_card(game)
 
     return {
-        "trigger_card": card_to_text(first),
-        "third_card": card_to_text(third),
-        "predicted_suit": predicted_suit,
+        "trigger_card": card_to_text(first_card),
+        "predicted_rank": first_rank,
     }
 
 
 # =====================================================================
-# ПОИСК МАСТИ У ИГРОКА
+# ПОИСК РАНГА У ИГРОКА
 # =====================================================================
 
-def find_suit_in_player(game, suit):
-    """
-    Ищет масть у игрока (левые скобки).
-    Возвращает текст карты или None.
-    """
+def find_rank_in_player(game, target_rank):
+    if not target_rank:
+        return None
 
-    target = normalize_suit(suit)
+    target_rank = normalize_rank(target_rank)
 
-    if not target:
+    if not target_rank:
         return None
 
     for card in game.get("player_cards", []):
-        if normalize_suit(card.get("suit")) == target:
-            return card_to_text(card)
+
+        rank = normalize_rank(card.get("rank"))
+
+        if rank == target_rank:
+            return {
+                "card": card_to_text(card),
+                "where": "player",
+            }
 
     return None

@@ -1,8 +1,10 @@
+
 import os
 import sys
 import re
 import json
 import time
+import math
 
 from datetime import datetime, time as dtime, timedelta
 
@@ -12,35 +14,31 @@ from config import (
     CHANNEL_STATS,
     PREDICTIONS_FILE,
     POLL_INTERVAL,
-    FINALIZE_WAIT_SECONDS,
-    TARGET_OFFSET,
     DOGON_GAMES,
-    TOTAL_CHECK_GAMES,
-    PREDICTION_TIMEOUT_MINUTES,
-    PENDING_CHECK_TIMEOUT_MINUTES,
-    SLEEP_HOUR, SLEEP_MINUTE,
-    WAKE_HOUR, WAKE_MINUTE,
-    LAST_PREDICTION_HOUR, LAST_PREDICTION_MINUTE,
-    CLEANUP_HOUR, CLEANUP_MINUTE,
+    CLEANUP_HOUR,
+    CLEANUP_MINUTE,
     MAX_GAMES_CACHE,
     MAX_PREDICTIONS_STORED,
     MOSCOW_TZ,
+    TARGET_OFFSET,
+    PUBLISH_OFFSET,
 )
 
 from parsers import (
     parse_game_message,
     log_game,
     add_game_offset,
-    find_trigger,
-    find_suit_in_player,
-    normalize_suit,
-    cards_to_text,
+    find_trigger_21,
+    find_rank_in_player,
 )
+
+from coefs import get_player_cf
 
 from telegram_api import (
     delete_webhook,
     telegram_send,
     telegram_edit,
+    telegram_delete,
     process_telegram_updates,
     load_offset,
 )
@@ -49,11 +47,30 @@ from bank import (
     load_bank,
     save_bank,
     get_current_bet,
-    bet_for_dogon,
+    get_balance,
+    apply_dogon_bet,
     apply_win,
     apply_lose,
     apply_return,
 )
+
+# =====================================================================
+# КОНСТАНТЫ
+# =====================================================================
+
+PREDICTION_TIMEOUT_MINUTES = 300
+FINALIZE_WAIT_SECONDS = 30
+PENDING_CHECK_TIMEOUT_MINUTES = 5
+
+# Фиксированные ставки D0-D6.
+DOGON_BETS = (50, 75, 113, 170, 255, 383, 575)
+MAX_DOGON_INDEX = 6
+
+# Цель должна быть ровно на +10 игр от триггера.
+REQUIRED_TARGET_OFFSET = 10
+
+# Публикуем за 2 игры до целевой.
+REQUIRED_PUBLISH_OFFSET = 2
 
 
 # =====================================================================
@@ -77,89 +94,130 @@ if not CHANNEL_STATS:
 # ГЛОБАЛЬНЫЕ ДАННЫЕ
 # =====================================================================
 
-games_cache = {}          # {game_number: game_dict}
-pending_games = {}        # {game_number: {"first_seen": ts, "text": str}}
-predictions = []          # список прогнозов
+games_cache = {}
+finalized_games = {}
+pending_games = {}
+predictions = []
 last_cleanup_date = None
 
 
 # =====================================================================
-# РАСПИСАНИЕ СНА
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # =====================================================================
 
-def is_sleep_time(now=None):
-    if now is None:
-        now = datetime.now(MOSCOW_TZ)
-
-    current = now.time()
-    sleep_start = dtime(SLEEP_HOUR, SLEEP_MINUTE)
-    wake_start = dtime(WAKE_HOUR, WAKE_MINUTE)
-
-    if sleep_start <= current or current < wake_start:
-        return True
-
-    return False
+def now_moscow():
+    return datetime.now(MOSCOW_TZ)
 
 
-def is_last_prediction_time(now=None):
-    if now is None:
-        now = datetime.now(MOSCOW_TZ)
+def parse_datetime(value, default=None):
+    if not value:
+        return default
 
-    current = now.time()
-    cutoff = dtime(LAST_PREDICTION_HOUR, LAST_PREDICTION_MINUTE)
-    sleep_start = dtime(SLEEP_HOUR, SLEEP_MINUTE)
+    try:
+        result = datetime.fromisoformat(value)
 
-    if cutoff <= current < sleep_start:
-        return True
+        if result.tzinfo is None:
+            result = MOSCOW_TZ.localize(result)
 
-    return False
+        return result
 
+    except (ValueError, TypeError):
+        return default
+
+
+def get_game(game_number):
+    """Возвращает наиболее актуальную версию игры."""
+    return games_cache.get(game_number) or finalized_games.get(game_number)
+
+
+def calculate_bet_amount(base_bet, dogon_index):
+    """Возвращает фиксированную ставку D0-D6."""
+    try:
+        index = int(dogon_index)
+    except (ValueError, TypeError):
+        index = 0
+
+    index = max(0, min(index, MAX_DOGON_INDEX))
+    return DOGON_BETS[index]
+
+
+def get_max_dogon():
+    """Не допускаем выход за пределы D6."""
+    try:
+        configured = int(DOGON_GAMES)
+    except (ValueError, TypeError):
+        configured = MAX_DOGON_INDEX
+
+    return max(0, min(configured, MAX_DOGON_INDEX))
+
+
+def normalize_message_id(response):
+    """Извлекает message_id из поддерживаемых форматов ответа."""
+    if isinstance(response, bool):
+        return None
+
+    if isinstance(response, int):
+        return response if response > 0 else None
+
+    if not isinstance(response, dict):
+        return None
+
+    if response.get("message_id"):
+        return response["message_id"]
+
+    result = response.get("result")
+
+    if isinstance(result, dict):
+        message_id = result.get("message_id")
+        if message_id:
+            return message_id
+
+    return None
+
+
+def save_state():
+    save_predictions()
+    save_bank()
+
+
+# =====================================================================
+# ОЧИСТКА
+# =====================================================================
 
 def should_cleanup_now(now=None):
     global last_cleanup_date
 
     if now is None:
-        now = datetime.now(MOSCOW_TZ)
+        now = now_moscow()
 
     if last_cleanup_date == now.date():
         return False
 
     cleanup_time = dtime(CLEANUP_HOUR, CLEANUP_MINUTE)
 
-    if now.time() >= cleanup_time:
-        return True
+    return now.time() >= cleanup_time
 
-    return False
-
-
-# =====================================================================
-# НОЧНАЯ ОЧИСТКА
-# =====================================================================
 
 def cleanup_nightly():
-    global games_cache, pending_games, predictions, last_cleanup_date
+    global games_cache
+    global finalized_games
+    global pending_games
+    global last_cleanup_date
 
-    now = datetime.now(MOSCOW_TZ)
+    now = now_moscow()
 
-    print("", flush=True)
-    print("🧹 НОЧНАЯ ОЧИСТКА (03:00)", flush=True)
+    print("🧹 НОЧНАЯ ОЧИСТКА", flush=True)
 
-    games_count = len(games_cache)
+    # Не удаляем активные прогнозы и их состояние.
     games_cache.clear()
-    print(f"   🗑️ games_cache: удалено {games_count}", flush=True)
-
-    pending_count = len(pending_games)
+    finalized_games.clear()
     pending_games.clear()
-    print(f"   🗑️ pending_games: удалено {pending_count}", flush=True)
 
     last_cleanup_date = now.date()
 
-    print("✅ Ночная очистка завершена", flush=True)
-    print("", flush=True)
-
 
 # =====================================================================
-# ЗАГРУЗКА / СОХРАНЕНИЕ ПРОГНОЗОВ
+# ХРАНЕНИЕ ПРОГНОЗОВ
 # =====================================================================
 
 def load_predictions():
@@ -176,16 +234,26 @@ def load_predictions():
         predictions = data if isinstance(data, list) else []
 
     except Exception as e:
-        print(f"⚠️ Ошибка чтения {PREDICTIONS_FILE}: {e}", flush=True)
+        print(f"⚠️ Ошибка загрузки прогнозов: {e}", flush=True)
         predictions = []
 
 
 def save_predictions():
     try:
+        directory = os.path.dirname(os.path.abspath(PREDICTIONS_FILE))
+        os.makedirs(directory, exist_ok=True)
+
         tmp = PREDICTIONS_FILE + ".tmp"
 
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(predictions, f, ensure_ascii=False, indent=2)
+            json.dump(
+                predictions,
+                f,
+                ensure_ascii=False,
+                indent=2
+            )
+            f.flush()
+            os.fsync(f.fileno())
 
         os.replace(tmp, PREDICTIONS_FILE)
 
@@ -193,33 +261,22 @@ def save_predictions():
         print(f"⚠️ Ошибка сохранения прогнозов: {e}", flush=True)
 
 
-# =====================================================================
-# АКТИВНЫЙ ПРОГНОЗ (блокировка нового)
-# =====================================================================
-
 def has_active_prediction():
-    """Есть ли хотя бы один pending / pending_check прогноз."""
+    active_statuses = (
+        "pending_check",
+        "pending_publish",
+        "pending",
+        "pending_edit",
+    )
 
-    for p in predictions:
-        if p.get("status") in ("pending", "pending_check"):
-            return True
+    return any(
+        p.get("status") in active_statuses
+        for p in predictions
+    )
 
-    return False
-
-
-# =====================================================================
-# ПОИСК АНОМАЛИИ #R В ИГРЕ ПО НОМЕРУ
-# =====================================================================
 
 def find_r_anomaly(game_number):
-    """
-    Возвращает:
-      True  — игра есть в кэше и в ней #R
-      False — игра есть в кэше и в ней нет #R
-      None  — игры нет в кэше (неизвестно)
-    """
-
-    game = games_cache.get(game_number)
+    game = get_game(game_number)
 
     if not game:
         return None
@@ -228,566 +285,715 @@ def find_r_anomaly(game_number):
 
 
 # =====================================================================
+# СООБЩЕНИЯ TELEGRAM
+# =====================================================================
+
+def make_prediction_message(prediction, dogon_index):
+    target = prediction["target_number"]
+    rank = prediction["predicted_rank"]
+
+    bet_amount = calculate_bet_amount(
+        prediction.get("base_bet", 50),
+        dogon_index
+    )
+
+    return (
+        f"🎯 Игра: <b>#N{target}</b>: "
+        f"{rank} ставка {bet_amount}₽"
+    )
+
+
+def make_result_message(
+    prediction,
+    result,
+    dogon_index,
+    found_card=None
+):
+    target = prediction["target_number"]
+    rank = prediction["predicted_rank"]
+
+    bet_amount = calculate_bet_amount(
+        prediction.get("base_bet", 50),
+        dogon_index
+    )
+
+    balance = int(math.ceil(get_balance()))
+
+    if result == "win":
+        return (
+            f"🎯 Игра: <b>#N{target}</b>: "
+            f"{rank} ✅ при {bet_amount}₽\n"
+            f"🤑 Баланс: {balance}₽"
+        )
+
+    if result == "lose":
+        return (
+            f"🎯 Игра: <b>#N{target}</b>: "
+            f"{rank} ❌\n"
+            f"🤑 Баланс: {balance}₽"
+        )
+
+    if result == "return":
+        return (
+            f"🎯 Игра: <b>#N{target}</b>: "
+            f"{rank} ♻️\n"
+            f"🤑 Баланс: {balance}₽"
+        )
+
+    return f"🎯 Игра: <b>#N{target}</b>: {rank} ⚠️"
+
+
+def is_waiting_message(text):
+    if not text:
+        return True
+
+    if "Ожидание" in text or "⏳" in text:
+        return True
+
+    groups = re.findall(r"\(([^()]*)\)", text)
+
+    if len(groups) < 2:
+        return True
+
+    card_pattern = re.compile(r"(?:10|[2-9AJQK])[♠♣♦♥]")
+
+    if not card_pattern.search(groups[0]):
+        return True
+
+    return False
+
+
+# =====================================================================
 # СОЗДАНИЕ ПРОГНОЗА
 # =====================================================================
 
-def make_prediction_message(prediction):
-    target = prediction["target_number"]
-    suit = normalize_suit(prediction["predicted_suit"])
-    return f"🎯 Игра: <b>#N{target}</b>: {suit}"
-
-
-def make_result_message(prediction, result):
-    target = prediction["target_number"]
-    suit = normalize_suit(prediction["predicted_suit"])
-
-    if result == "win":
-        mark = " ✅"
-    elif result == "lose":
-        mark = " ❌"
-    elif result == "return":
-        mark = " ♻️"
-    elif result == "cancelled":
-        mark = " ⛔ (аномалия #R)"
-    else:
-        mark = " ⚠️"
-
-    return f"🎯 Игра: <b>#N{target}</b>: {suit}{mark}"
-
-
 def create_prediction(game):
-    """Проверяет триггер и создаёт отложенный прогноз (если можно)."""
-
-    # Пока открыт pending / pending_check — новый не создаём
     if has_active_prediction():
         return None
 
-    trigger = find_trigger(game)
+    trigger = find_trigger_21(game)
 
     if not trigger:
         return None
 
-    predicted_suit = trigger["predicted_suit"]
+    trigger_number = game.get("game_number")
 
-    trigger_number = game["game_number"]
-    trigger_id = game.get("game_id")
-
-    # ---- ПРОВЕРКА «ПЕРЕД»: #N(trigger - 1) ----
-    prev_number = trigger_number - 1
-    prev_anomaly = find_r_anomaly(prev_number)
-
-    if prev_anomaly is True:
-        print("", flush=True)
-        print("⛔ ПРОГНОЗ НЕ СОЗДАН (аномалия #R перед триггером)", flush=True)
-        print(f"📌 Триггер: #N{trigger_number}", flush=True)
-        print(f"⚠️ Аномалия: #N{prev_number} содержит #R", flush=True)
+    if trigger_number is None:
         return None
 
-    target_number = add_game_offset(trigger_number, TARGET_OFFSET)
+    try:
+        trigger_number = int(trigger_number)
+    except (ValueError, TypeError):
+        return None
 
-    # Проверка на дубликат (не должно быть, но на всякий случай)
+    predicted_rank = trigger.get("predicted_rank")
+
+    if not predicted_rank:
+        return None
+
+    # Настройки config.py не меняем.
+    # Защищаем расчёт от случайно неверных значений.
+    target_offset = REQUIRED_TARGET_OFFSET
+    publish_offset = REQUIRED_PUBLISH_OFFSET
+
+    # Проверяем предыдущий номер с учётом игрового цикла.
+    before_number = add_game_offset(trigger_number, -1)
+    after_number = add_game_offset(trigger_number, 1)
+
+    before_game = get_game(before_number)
+
+    # Если предыдущая игра доступна и в ней есть #R,
+    # прогноз не создаём.
+    if before_game and before_game.get("is_r"):
+        print(
+            f"⛔ #N{trigger_number}: #R перед триггером, пропуск",
+            flush=True
+        )
+        return None
+
+    target_number = add_game_offset(
+        trigger_number,
+        target_offset
+    )
+
+    publish_number = add_game_offset(
+        target_number,
+        -publish_offset
+    )
+
     for old in predictions:
-        if old.get("status") != "pending":
-            continue
+        if old.get("trigger_number") == trigger_number:
+            if old.get("status") not in (
+                "cancelled",
+                "lose",
+                "win",
+                "return",
+            ):
+                return None
 
-        if (
-            old.get("target_number") == target_number
-            and old.get("predicted_suit") == predicted_suit
-        ):
-            return None
-
-    base_bet = get_current_bet()
+    # Для этой последовательности первая ставка всегда 50 ₽.
+    base_bet = DOGON_BETS[0]
 
     prediction = {
-        "algorithm": "three_cards_trigger",
+        "algorithm": "cyber21_rank_v4",
 
         "trigger_number": trigger_number,
-        "trigger_game_id": trigger_id,
-        "trigger_card": trigger["trigger_card"],
-        "third_card": trigger["third_card"],
+        "trigger_game_id": game.get("game_id"),
+        "trigger_card": trigger.get("trigger_card"),
+        "predicted_rank": predicted_rank,
+        "cf_player": get_player_cf(predicted_rank),
 
+        "target_offset": target_offset,
         "target_number": target_number,
-        "predicted_suit": predicted_suit,
-        "target_offset": TARGET_OFFSET,
+        "publish_number": publish_number,
 
         "base_bet": base_bet,
         "bet": base_bet,
 
-        "status": "pending_check",   # ← отложенный прогноз
-        "dogon": None,
+        "status": "pending_check",
+        "dogon": 0,
 
-        "created_at": datetime.now(MOSCOW_TZ).isoformat(),
+        "created_at": now_moscow().isoformat(),
         "sent_at": None,
         "closed_at": None,
 
         "message_id": None,
+        "pending_publish": False,
 
         "result_game": None,
         "found_card": None,
         "close_reason": None,
 
-        "check_game_number": trigger_number + 1,  # ждём именно её
+        "check_before_game_number": before_number,
+        "check_game_number": after_number,
+
+        "before_r_checked": False,
+        "after_r_checked": False,
+
+        "last_publish_attempt": None,
     }
 
     predictions.append(prediction)
     save_predictions()
 
-    print("", flush=True)
-    print("🔮 ПРОГНОЗ СОЗДАН (отложенный)", flush=True)
     print(
-        f"📌 Триггер: #N{trigger_number} "
-        f"({trigger['trigger_card']} ... {trigger['third_card']})",
-        flush=True,
-    )
-    print(f"🎯 Цель: #N{target_number}", flush=True)
-    print(f"🃏 Масть: {predicted_suit}", flush=True)
-    print(f"💰 Ставка Д0: {base_bet} ₽", flush=True)
-    print(
-        f"⏳ Ожидаем проверку #N{trigger_number + 1} "
-        f"(аномалия #R)",
-        flush=True,
+        f"🔮 СОЗДАН #N{trigger_number} -> "
+        f"Цель #{target_number} "
+        f"(Публикация #{publish_number})",
+        flush=True
     )
 
     return prediction
 
 
+# =====================================================================
+# ПУБЛИКАЦИЯ ПРОГНОЗА
+# =====================================================================
+
 def send_prediction(prediction):
-    message = make_prediction_message(prediction)
-    message_id = telegram_send(message)
+    """
+    Публикует прогноз.
+
+    Если message_id не получен, сохраняет pending_publish.
+    Следующая итерация основного цикла повторит попытку.
+    """
+
+    if prediction.get("message_id"):
+        return True
+
+    dogon_index = prediction.get("dogon", 0)
+
+    message = make_prediction_message(
+        prediction,
+        dogon_index
+    )
+
+    prediction["status"] = "pending_publish"
+    prediction["pending_publish"] = True
+    prediction["last_publish_attempt"] = now_moscow().isoformat()
+
+    # Сохраняем состояние до сетевого вызова.
+    save_predictions()
+
+    try:
+        response = telegram_send(message)
+        message_id = normalize_message_id(response)
+
+    except Exception as e:
+        print(
+            f"⚠️ Ошибка публикации #{prediction['target_number']}: {e}",
+            flush=True
+        )
+
+        save_predictions()
+        return False
 
     if not message_id:
+        prediction["status"] = "pending_publish"
+        prediction["pending_publish"] = True
+        prediction["message_id"] = None
+
+        save_predictions()
+
         print(
-            f"❌ Не удалось отправить "
-            f"#N{prediction['target_number']}",
-            flush=True,
+            f"⚠️ Telegram не вернул message_id для "
+            f"#{prediction['target_number']}; "
+            "повторная попытка будет выполнена",
+            flush=True
         )
+
         return False
 
     prediction["message_id"] = message_id
-    prediction["sent_at"] = datetime.now(MOSCOW_TZ).isoformat()
+    prediction["sent_at"] = now_moscow().isoformat()
+    prediction["status"] = "pending"
+    prediction["pending_publish"] = False
 
-    save_predictions()
+    prediction["dogon"] = dogon_index
+    prediction["bet"] = calculate_bet_amount(
+        prediction["base_bet"],
+        dogon_index
+    )
+
+    apply_dogon_bet(prediction, dogon_index)
+
+    save_state()
 
     print(
-        f"📤 ПРОГНОЗ ОТПРАВЛЕН: "
-        f"#N{prediction['target_number']} "
-        f"{prediction['predicted_suit']}",
-        flush=True,
+        f"📤 ОТПРАВЛЕН #{prediction['target_number']} "
+        f"(ставка {prediction['bet']}₽)",
+        flush=True
     )
 
     return True
 
 
 # =====================================================================
-# РАЗРЕШЕНИЕ ОТЛОЖЕННЫХ ПРОГНОЗОВ (pending_check)
+# ПРОВЕРКА #R ДО И ПОСЛЕ ТРИГГЕРА
 # =====================================================================
 
 def resolve_pending_checks():
-    """
-    Для каждого pending_check:
-      - если в кэше появилась игра check_game_number:
-          - is_r → cancelled
-          - иначе → отправляем прогноз (pending)
-      - если в кэше появилась игра > check_game_number (пропуск) → cancelled
-      - если истёк таймаут → cancelled
-    """
-
-    now = datetime.now(MOSCOW_TZ)
+    now = now_moscow()
     changed = False
 
-    for prediction in predictions:
-
-        if prediction.get("status") != "pending_check":
+    for p in predictions:
+        if p.get("status") != "pending_check":
             continue
 
-        check_number = prediction.get("check_game_number")
-        trigger_number = prediction.get("trigger_number")
+        before_num = p.get("check_before_game_number")
+        after_num = p.get("check_game_number")
 
-        if not check_number:
-            # На всякий случай — отменяем
-            prediction["status"] = "cancelled"
-            prediction["close_reason"] = "no_check_number"
-            prediction["closed_at"] = now.isoformat()
+        before_game = get_game(before_num)
+        after_game = get_game(after_num)
+
+        # Проверяем игру перед триггером.
+        if before_game:
+            p["before_r_checked"] = True
+
+            if before_game.get("is_r"):
+                p["status"] = "cancelled"
+                p["close_reason"] = "anomaly_before"
+                p["closed_at"] = now.isoformat()
+
+                print(
+                    f"⛔ ОТМЕНА #{p['trigger_number']}: "
+                    "#R перед триггером",
+                    flush=True
+                )
+
+                changed = True
+                continue
+
+        # Проверяем игру после триггера.
+        if after_game:
+            p["after_r_checked"] = True
+
+            if after_game.get("is_r"):
+                p["status"] = "cancelled"
+                p["close_reason"] = "anomaly_after"
+                p["closed_at"] = now.isoformat()
+
+                print(
+                    f"⛔ ОТМЕНА #{p['trigger_number']}: "
+                    "#R после триггера",
+                    flush=True
+                )
+
+                changed = True
+                continue
+
+        # Публикация разрешена только после обеих проверок.
+        if (
+            p.get("before_r_checked")
+            and p.get("after_r_checked")
+        ):
+            p["status"] = "pending_publish"
+            p["pending_publish"] = True
+
+            print(
+                f"✅ #N{p['trigger_number']}: "
+                "обе проверки #R пройдены",
+                flush=True
+            )
+
             changed = True
             continue
 
-        # ---- Есть ли игра проверки? ----
-        check_game = games_cache.get(check_number)
+        created = parse_datetime(p.get("created_at"), now)
 
-        if check_game is not None:
-            if check_game.get("is_r"):
-                # Аномалия после триггера → отмена
-                prediction["status"] = "cancelled"
-                prediction["close_reason"] = "anomaly_after"
-                prediction["closed_at"] = now.isoformat()
-                save_predictions()
+        if now - created > timedelta(
+            minutes=PENDING_CHECK_TIMEOUT_MINUTES
+        ):
+            p["status"] = "cancelled"
+            p["close_reason"] = "check_timeout"
+            p["closed_at"] = now.isoformat()
 
-                print("", flush=True)
-                print(
-                    f"⛔ ПРОГНОЗ ОТМЕНЁН (аномалия #R после триггера)",
-                    flush=True,
-                )
-                print(f"📌 Триггер: #N{trigger_number}", flush=True)
-                print(f"⚠️ Аномалия: #N{check_number} содержит #R", flush=True)
+            print(
+                f"⛔ ОТМЕНА #{p['trigger_number']}: "
+                "не удалось завершить обе проверки #R",
+                flush=True
+            )
 
-                changed = True
-                continue
-            else:
-                # Чисто → отправляем
-                prediction["status"] = "pending"
-                save_predictions()
+            changed = True
 
-                send_prediction(prediction)
+    if changed:
+        save_predictions()
 
-                changed = True
-                continue
 
-        # ---- Пропуск: есть игра с номером > check_number? ----
-        skipped = False
+# =====================================================================
+# ОЖИДАЮЩИЕ ПУБЛИКАЦИИ
+# =====================================================================
 
-        for game_number in games_cache.keys():
-            if game_number > check_number:
-                skipped = True
-                break
+def resolve_pending_publishes():
+    now = now_moscow()
 
-        if skipped:
-            prediction["status"] = "cancelled"
-            prediction["close_reason"] = "skipped"
-            prediction["closed_at"] = now.isoformat()
+    all_numbers = (
+        list(games_cache.keys())
+        + list(finalized_games.keys())
+    )
+
+    latest_game = max(all_numbers) if all_numbers else 0
+
+    for p in predictions:
+        if p.get("status") != "pending_publish":
+            continue
+
+        # Повторяем отправку, если message_id не был получен.
+        if p.get("pending_publish") and not p.get("message_id"):
+            if latest_game >= p.get("publish_number", 0):
+                send_prediction(p)
+            continue
+
+        pub_num = p.get("publish_number")
+
+        if latest_game >= pub_num:
+            send_prediction(p)
+            continue
+
+        created = parse_datetime(p.get("created_at"), now)
+
+        if now - created > timedelta(
+            minutes=PREDICTION_TIMEOUT_MINUTES
+        ):
+            p["status"] = "cancelled"
+            p["close_reason"] = "publish_timeout"
+            p["closed_at"] = now.isoformat()
+
+            print(
+                f"⛔ ОТМЕНА #{p['trigger_number']}: "
+                "таймаут публикации",
+                flush=True
+            )
+
             save_predictions()
 
-            print("", flush=True)
-            print(
-                f"⛔ ПРОГНОЗ ОТМЕНЁН (игра #N{check_number} пропущена)",
-                flush=True,
-            )
-            print(f"📌 Триггер: #N{trigger_number}", flush=True)
-
-            changed = True
-            continue
-
-        # ---- Таймаут ----
-        created_at_str = prediction.get("created_at")
-
-        if created_at_str:
-            try:
-                created_at = datetime.fromisoformat(created_at_str)
-
-                if now - created_at > timedelta(
-                    minutes=PENDING_CHECK_TIMEOUT_MINUTES
-                ):
-                    prediction["status"] = "cancelled"
-                    prediction["close_reason"] = "timeout"
-                    prediction["closed_at"] = now.isoformat()
-                    save_predictions()
-
-                    print("", flush=True)
-                    print(
-                        f"⛔ ПРОГНОЗ ОТМЕНЁН (таймаут ожидания "
-                        f"#N{check_number} > "
-                        f"{PENDING_CHECK_TIMEOUT_MINUTES} мин)",
-                        flush=True,
-                    )
-                    print(f"📌 Триггер: #N{trigger_number}", flush=True)
-
-                    changed = True
-                    continue
-
-            except Exception:
-                pass
-
-    if changed:
-        save_predictions()
-
 
 # =====================================================================
-# ПРОВЕРКА ПРОГНОЗОВ
-# =====================================================================
-
-def check_predictions():
-    changed = False
-    now = datetime.now(MOSCOW_TZ)
-
-    for prediction in predictions:
-
-        if prediction.get("status") != "pending":
-            continue
-
-        target = prediction.get("target_number")
-
-        if not target:
-            continue
-
-        # ---- ТАЙМАУТ → ВОЗВРАТ ♻️ ----
-        sent_at_str = prediction.get("sent_at")
-
-        if sent_at_str:
-            try:
-                sent_at = datetime.fromisoformat(sent_at_str)
-
-                if now - sent_at > timedelta(minutes=PREDICTION_TIMEOUT_MINUTES):
-                    prediction["status"] = "return"
-                    prediction["close_reason"] = "timeout"
-                    prediction["closed_at"] = now.isoformat()
-
-                    telegram_edit(
-                        prediction.get("message_id"),
-                        make_result_message(prediction, "return"),
-                    )
-
-                    apply_return(prediction, prediction.get("bet", 0))
-
-                    print(
-                        f"♻️ ВОЗВРАТ #N{target} (timeout > "
-                        f"{PREDICTION_TIMEOUT_MINUTES} мин)",
-                        flush=True,
-                    )
-
-                    changed = True
-                    continue
-
-            except Exception:
-                pass
-
-        # ---- ПРОВЕРКА ПО ДОГОНАМ Д0..Д3 ----
-        checked_games = []
-        waiting = False
-        won = False
-
-        base_bet = prediction.get("base_bet", prediction.get("bet", 0))
-
-        for dogon in range(0, DOGON_GAMES + 1):
-
-            game_number = add_game_offset(target, dogon)
-            game = games_cache.get(game_number)
-
-            if not game:
-                waiting = True
-                break
-
-            checked_games.append(game_number)
-
-            found_card = find_suit_in_player(game, prediction["predicted_suit"])
-
-            if found_card:
-                bet_amount = bet_for_dogon(base_bet, dogon)
-
-                prediction["status"] = "win"
-                prediction["result_game"] = game_number
-                prediction["found_card"] = found_card
-                prediction["dogon"] = dogon
-                prediction["bet"] = bet_amount
-                prediction["closed_at"] = now.isoformat()
-
-                telegram_edit(
-                    prediction.get("message_id"),
-                    make_result_message(prediction, "win"),
-                )
-
-                apply_win(prediction, dogon, bet_amount)
-
-                print("", flush=True)
-                print(f"✅ ПРОГНОЗ ЗАШЁЛ #N{target}", flush=True)
-                print(f"🎯 Масть: {prediction['predicted_suit']}", flush=True)
-                print(f"🃏 Карта: {found_card}", flush=True)
-                print(f"🔄 Догон: Д{dogon}", flush=True)
-                print(f"💰 Ставка: {bet_amount} ₽", flush=True)
-
-                changed = True
-                won = True
-                break
-
-        if won:
-            continue
-
-        # Если ждём игру — ничего не делаем
-        if waiting:
-            continue
-
-        # ---- ВСЕ 4 ИГРЫ ПРОИГРАНЫ → LOSE ----
-        bet_amount = base_bet
-
-        prediction["status"] = "lose"
-        prediction["result_game"] = (
-            checked_games[-1]
-            if checked_games
-            else add_game_offset(target, DOGON_GAMES)
-        )
-        prediction["dogon"] = DOGON_GAMES
-        prediction["bet"] = bet_amount
-        prediction["closed_at"] = now.isoformat()
-
-        telegram_edit(
-            prediction.get("message_id"),
-            make_result_message(prediction, "lose"),
-        )
-
-        apply_lose(prediction, bet_amount)
-
-        print("", flush=True)
-        print(f"❌ ПРОГНОЗ НЕ ЗАШЁЛ #N{target}", flush=True)
-        print(f"🎯 Масть: {prediction['predicted_suit']}", flush=True)
-
-        changed = True
-
-    if changed:
-        save_predictions()
-
-
-# =====================================================================
-# ОБРАБОТКА ИГР ИЗ TELEGRAM
-# =====================================================================
-
-def on_game_message(game_number, text, is_edited):
-    """Колбэк из telegram_api.process_telegram_updates."""
-
-    # Если игра уже в pending — обновляем текст
-    if game_number in pending_games:
-        pending_games[game_number]["text"] = text
-        print(f"🔄 Обновлена pending #N{game_number}", flush=True)
-        return
-
-    # Если игра уже в кэше — обновляем
-    if game_number in games_cache:
-        game = parse_game_message(text)
-
-        if not game:
-            return
-
-        games_cache[game_number] = game
-        print(f"🔄 Обновлена #N{game_number}", flush=True)
-        return
-
-    # Маркер завершения игры
-    has_marker = bool(re.search(r"[✅🔰▶️◀️]", text))
-
-    if has_marker:
-        pending_games[game_number] = {
-            "first_seen": time.time(),
-            "text": text,
-        }
-        print(f"👀 #N{game_number} → pending", flush=True)
-
-
-# =====================================================================
-# ФИНАЛИЗАЦИЯ PENDING ИГР
+# ФИНАЛИЗАЦИЯ ИГР
 # =====================================================================
 
 def finalize_pending_games():
-    now = time.time()
-    ready = []
+    current_time = time.time()
 
-    for game_number, info in list(pending_games.items()):
-        first_seen = info.get("first_seen", now)
+    ready = [
+        num
+        for num, info in pending_games.items()
+        if current_time - info.get(
+            "last_update",
+            current_time
+        ) >= FINALIZE_WAIT_SECONDS
+    ]
 
-        if now - first_seen >= FINALIZE_WAIT_SECONDS:
-            ready.append(game_number)
-
-    for game_number in ready:
-
-        info = pending_games.pop(game_number, None)
+    for num in ready:
+        info = pending_games.pop(num, None)
 
         if not info:
             continue
 
-        text = info.get("text", "")
-        game = parse_game_message(text)
+        game = parse_game_message(info.get("text", ""))
+
+        if game:
+            finalized_games[num] = game
+
+
+# =====================================================================
+# ПРОВЕРКА ПРОГНОЗОВ И ДОГОНОВ
+# =====================================================================
+
+def check_predictions():
+    changed = False
+    now = now_moscow()
+
+    for p in predictions:
+        if p.get("status") != "pending":
+            continue
+
+        target = p.get("target_number")
+        current_dogon = int(p.get("dogon", 0))
+
+        # Номер игры с учётом игрового цикла.
+        game_number = add_game_offset(
+            target,
+            current_dogon
+        )
+
+        game = finalized_games.get(game_number)
 
         if not game:
-            print(f"⚠️ #N{game_number} не удалось разобрать", flush=True)
+            sent_at = parse_datetime(p.get("sent_at"), now)
+
+            if now - sent_at > timedelta(
+                minutes=PREDICTION_TIMEOUT_MINUTES
+            ):
+                p["status"] = "return"
+                p["closed_at"] = now.isoformat()
+                p["result_game"] = game_number
+
+                apply_return(p, p.get("bet", 0))
+
+                if p.get("message_id"):
+                    telegram_edit(
+                        p["message_id"],
+                        make_result_message(
+                            p,
+                            "return",
+                            current_dogon
+                        )
+                    )
+
+                print(
+                    f"♻️ Возврат #{target}: "
+                    f"игра #{game_number} не получена",
+                    flush=True
+                )
+
+                changed = True
+
             continue
 
-        games_cache[game_number] = game
-        log_game(game)
+        p["result_game"] = game_number
 
-        if is_sleep_time():
-            print(f"😴 #N{game_number}: сон — прогноз не создаём", flush=True)
-            continue
+        found = find_rank_in_player(
+            game,
+            p["predicted_rank"]
+        )
 
-        if is_last_prediction_time():
-            print(
-                f"🌙 #N{game_number}: после 22:30 — прогноз не создаём",
-                flush=True,
+        # -------------------------------------------------------------
+        # ВЫИГРЫШ
+        # -------------------------------------------------------------
+
+        if found:
+            p["status"] = "win"
+            p["dogon"] = current_dogon
+            p["found_card"] = found
+            p["closed_at"] = now.isoformat()
+
+            # Сначала применяем выигрыш, потом формируем баланс.
+            apply_win(
+                p,
+                current_dogon,
+                found
             )
+
+            if p.get("message_id"):
+                telegram_edit(
+                    p["message_id"],
+                    make_result_message(
+                        p,
+                        "win",
+                        current_dogon,
+                        found
+                    )
+                )
+
+            print(
+                f"✅ ПРОГНОЗ #{target} ЗАШЁЛ "
+                f"на D{current_dogon}",
+                flush=True
+            )
+
+            changed = True
             continue
 
-        # Сначала пробуем разрешить отложенные прогнозы (эта игра может
-        # быть проверочной #N(trigger+1))
-        resolve_pending_checks()
+        # -------------------------------------------------------------
+        # ПРОИГРЫШ И ПЕРЕХОД К СЛЕДУЮЩЕМУ ДОГОНУ
+        # -------------------------------------------------------------
 
-        # Потом пробуем создать новый прогноз
-        create_prediction(game)
+        max_dogon = get_max_dogon()
+
+        if current_dogon < max_dogon:
+            next_dogon = current_dogon + 1
+
+            # Списываем текущую ставку (внутри bank.py уже спишется следующая)
+            apply_lose(p, current_dogon)
+
+            p["dogon"] = next_dogon
+            p["bet"] = calculate_bet_amount(
+                p["base_bet"],
+                next_dogon
+            )
+            p["sent_at"] = now.isoformat()
+
+            # УБРАЛИ apply_dogon_bet(p, next_dogon), так как apply_lose уже это сделала!
+
+            # Редактируем исходное сообщение.
+            if p.get("message_id"):
+                telegram_edit(
+                    p["message_id"],
+                    make_prediction_message(
+                        p,
+                        next_dogon
+                    )
+                )
+
+            print(
+                f"❌ D{current_dogon} проиграл, "
+                f"D{next_dogon} "
+                f"(ставка {p['bet']}₽)",
+                flush=True
+            )
+
+            changed = True
+            continue
+
+        # -------------------------------------------------------------
+        # ПРОИГРЫШ НА D6 — ЗАВЕРШЕНИЕ
+        # -------------------------------------------------------------
+
+        apply_lose(
+            p,
+            current_dogon
+        )
+
+        p["status"] = "lose"
+        p["closed_at"] = now.isoformat()
+
+        if p.get("message_id"):
+            telegram_edit(
+                p["message_id"],
+                make_result_message(
+                    p,
+                    "lose",
+                    current_dogon
+                )
+            )
+
+        print(
+            f"❌ ПРОГНОЗ #{target} ПРОИГРАН "
+            "(все догоны D0-D6)",
+            flush=True
+        )
+
+        changed = True
+
+    if changed:
+        save_state()
 
 
 # =====================================================================
-# ОЧИСТКА КЭШЕЙ
+# ПОЛУЧЕНИЕ ИГРОВЫХ СООБЩЕНИЙ
 # =====================================================================
 
-def cleanup_games_cache():
-    if len(games_cache) <= MAX_GAMES_CACHE:
+def on_game_message(game_number, text, is_edited):
+    if is_waiting_message(text):
         return
 
-    items = sorted(
-        games_cache.items(),
-        key=lambda kv: kv[1].get("received_at", ""),
-    )
+    game = parse_game_message(text)
 
-    for number, _ in items[:-MAX_GAMES_CACHE]:
-        del games_cache[number]
+    if not game or not game.get("player_cards"):
+        return
+
+    games_cache[game_number] = game
+
+    pending_games[game_number] = {
+        "text": text,
+        "last_update": time.time()
+    }
+
+    log_game(game)
+
+    create_prediction(game)
 
 
-def cleanup_predictions():
-    global predictions
+# =====================================================================
+# ОЧИСТКА КЭША
+# =====================================================================
+
+def cleanup_caches():
+    if len(games_cache) > MAX_GAMES_CACHE:
+        oldest = sorted(games_cache.keys())[
+            :len(games_cache) - MAX_GAMES_CACHE
+        ]
+
+        for num in oldest:
+            del games_cache[num]
+
+    if len(finalized_games) > MAX_GAMES_CACHE:
+        oldest = sorted(finalized_games.keys())[
+            :len(finalized_games) - MAX_GAMES_CACHE
+        ]
+
+        for num in oldest:
+            del finalized_games[num]
 
     if len(predictions) > MAX_PREDICTIONS_STORED:
-        predictions = predictions[-MAX_PREDICTIONS_STORED:]
+        # Не удаляем активные прогнозы.
+        active = [
+            p for p in predictions
+            if p.get("status") in (
+                "pending_check",
+                "pending_publish",
+                "pending",
+                "pending_edit",
+            )
+        ]
+
+        inactive = [
+            p for p in predictions
+            if p.get("status") not in (
+                "pending_check",
+                "pending_publish",
+                "pending",
+                "pending_edit",
+            )
+        ]
+
+        keep_count = max(
+            0,
+            MAX_PREDICTIONS_STORED - len(active)
+        )
+
+        predictions[:] = inactive[-keep_count:] + active \
+            if keep_count else active
+
         save_predictions()
 
 
 # =====================================================================
-# ГЛАВНЫЙ ЦИКЛ
+# ОСНОВНОЙ ЦИКЛ
 # =====================================================================
 
 def main():
-    global predictions
-
-    print("", flush=True)
-    print("==================================================", flush=True)
-    print("🚀 CYBER 21 — 3-Я КАРТА PREDICTOR", flush=True)
-    print("==================================================", flush=True)
-    print("📡 Игры: CHANNEL_STATS", flush=True)
-    print("📤 Прогнозы: CHANNEL_PROGNOZ", flush=True)
-    print(f"⏳ Финализация игры: {FINALIZE_WAIT_SECONDS} сек", flush=True)
-    print(f"🎯 Сдвиг цели: +{TARGET_OFFSET}", flush=True)
-    print(f"🔄 Догоны: Д0..Д{DOGON_GAMES}", flush=True)
-    print(
-        f"⏰ Таймаут → возврат: {PREDICTION_TIMEOUT_MINUTES} мин",
-        flush=True,
-    )
-    print(
-        f"⏳ Ожидание проверки #R: "
-        f"{PENDING_CHECK_TIMEOUT_MINUTES} мин",
-        flush=True,
-    )
-    print("", flush=True)
-    print("⏰ Расписание:", flush=True)
-    print(
-        f"   😴 Сон: {SLEEP_HOUR:02d}:{SLEEP_MINUTE:02d} — "
-        f"{WAKE_HOUR:02d}:{WAKE_MINUTE:02d}",
-        flush=True,
-    )
-    print(
-        f"   🌙 Последний прогноз до: "
-        f"{LAST_PREDICTION_HOUR:02d}:{LAST_PREDICTION_MINUTE:02d}",
-        flush=True,
-    )
-    print(
-        f"   🧹 Ночная очистка: "
-        f"{CLEANUP_HOUR:02d}:{CLEANUP_MINUTE:02d}",
-        flush=True,
-    )
-    print("==================================================", flush=True)
-
     delete_webhook()
 
     load_bank()
@@ -795,47 +1001,50 @@ def main():
 
     offset = load_offset()
 
-    print(f"📌 Telegram offset: {offset}", flush=True)
-    print(f"📊 Загружено прогнозов: {len(predictions)}", flush=True)
-
-    print("==================================================", flush=True)
-    print("🟢 БОТ ГОТОВ", flush=True)
-    print("==================================================", flush=True)
+    print("🚀 БОТ ЗАПУЩЕН", flush=True)
 
     while True:
         try:
             if should_cleanup_now():
                 cleanup_nightly()
 
-            offset = process_telegram_updates(offset, on_game_message)
+            offset = process_telegram_updates(
+                offset,
+                on_game_message
+            )
 
             finalize_pending_games()
             resolve_pending_checks()
+            resolve_pending_publishes()
             check_predictions()
-            cleanup_games_cache()
-            cleanup_predictions()
+            cleanup_caches()
 
             time.sleep(POLL_INTERVAL)
 
-        except KeyboardInterrupt:
-            print("\n🛑 Бот остановлен", flush=True)
-            break
-
         except Exception as e:
-            print(f"❌ Критическая ошибка: {e}", flush=True)
+            print(
+                f"❌ Ошибка основного цикла: {e}",
+                flush=True
+            )
+
             time.sleep(3)
 
 
 # =====================================================================
-# СТАРТ
+# ЗАПУСК
 # =====================================================================
 
 if __name__ == "__main__":
     import threading
 
-    # Бот — в фоне
-    threading.Thread(target=main, daemon=True).start()
+    threading.Thread(
+        target=main,
+        daemon=True
+    ).start()
 
-    # Сайт — в основном потоке (ОБЯЗАТЕЛЬНО)
     from web_server import start_web_server
+
     start_web_server()
+
+    while True:
+        time.sleep(60)

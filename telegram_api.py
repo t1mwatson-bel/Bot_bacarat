@@ -122,8 +122,6 @@ def telegram_send(text, chat_id=None):
 
 
 def telegram_edit(message_id, text, chat_id=None):
-    """Редактирует сообщение в канале прогнозов."""
-
     if not message_id:
         return False
 
@@ -143,10 +141,65 @@ def telegram_edit(message_id, text, chat_id=None):
 
         data = response.json()
 
-        return bool(data.get("ok"))
+        if data.get("ok"):
+            return True
+
+        # Не шумим на "not modified" — это нормально
+        desc = data.get("description", "")
+        if "not modified" not in desc:
+            print(f"⚠️ editMessageText: {data}", flush=True)
 
     except Exception as e:
         print(f"⚠️ Ошибка редактирования Telegram: {e}", flush=True)
+
+    return False
+
+
+# =====================================================================
+# УДАЛЕНИЕ СООБЩЕНИЙ (НОВАЯ ФУНКЦИЯ)
+# =====================================================================
+
+def telegram_delete(message_id, chat_id=None):
+    """
+    Удаляет сообщение из канала прогнозов.
+
+    Возвращает True при успехе, False при ошибке.
+    """
+
+    if not message_id:
+        return False
+
+    target_chat = chat_id or CHANNEL_PROGNOZ
+
+    try:
+        response = SESSION.post(
+            f"{TELEGRAM_API_URL}/deleteMessage",
+            json={
+                "chat_id": target_chat,
+                "message_id": message_id,
+            },
+            timeout=10,
+        )
+
+        data = response.json()
+
+        if data.get("ok"):
+            print(
+                f"🗑️ Удалено сообщение {message_id}",
+                flush=True,
+            )
+            return True
+
+        print(
+            f"⚠️ Не удалось удалить сообщение {message_id}: {data}",
+            flush=True,
+        )
+
+    except Exception as e:
+        print(
+            f"⚠️ Ошибка удаления сообщения {message_id}: {e}",
+            flush=True,
+        )
 
     return False
 
