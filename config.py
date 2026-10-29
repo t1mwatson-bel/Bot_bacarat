@@ -16,7 +16,9 @@ CHANNEL_STATS = os.getenv("CHANNEL_STATS")
 # ФАЙЛЫ ХРАНЕНИЯ
 # =====================================================================
 
-PREDICTIONS_FILE = "predictions.json"
+import os
+DATA_DIR = "/app/data" if os.path.exists("/app/data") else "."
+PREDICTIONS_FILE = os.path.join(DATA_DIR, "predictions.json")
 OFFSET_FILE = "telegram_offset.txt"
 BANK_FILE = "bank.json"
 STATS_HTML_FILE = "stats.html"
