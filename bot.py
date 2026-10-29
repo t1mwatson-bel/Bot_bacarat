@@ -700,10 +700,6 @@ def finalize_pending_games():
         games_cache[game_number] = game
         log_game(game)
 
-        if is_sleep_time():
-            print(f"😴 #N{game_number}: сон — прогноз не создаём", flush=True)
-            continue
-
         if is_last_prediction_time():
             print(
                 f"🌙 #N{game_number}: после 22:30 — прогноз не создаём",
