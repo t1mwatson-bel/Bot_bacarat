@@ -150,7 +150,7 @@ def parse_game_message(text):
       game_number, game_id,
       player_cards, dealer_cards,
       player_score, dealer_score,
-      is_draw, is_ochko, is_r,
+      is_draw, is_ochko,
       raw_text, received_at
     """
 
@@ -184,7 +184,6 @@ def parse_game_message(text):
 
     is_draw = bool(re.search(r"#X\b", text))
     is_ochko = bool(re.search(r"#O\b", text))
-    is_r = bool(re.search(r"#R\b", text))
 
     return {
         "game_number": game_number,
@@ -198,7 +197,6 @@ def parse_game_message(text):
 
         "is_draw": is_draw,
         "is_ochko": is_ochko,
-        "is_r": is_r,
 
         "raw_text": text,
 
@@ -233,9 +231,6 @@ def log_game(game):
 
     if game.get("is_ochko"):
         print("⭕ #O — ОЧКО", flush=True)
-
-    if game.get("is_r"):
-        print("⚠️ #R — АНОМАЛИЯ", flush=True)
 
     print("────────────────────────────────────", flush=True)
 
