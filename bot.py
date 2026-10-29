@@ -160,14 +160,21 @@ def make_prediction_message(prediction):
 def make_result_message(prediction, result):
     target = prediction["target_number"]
     suit = normalize_suit(prediction["predicted_suit"])
+    
+    # Получаем номер догона (если нет, ставим 0)
+    dogon = prediction.get("dogon", 0)
+
     if result == "win":
-        mark = " ✅"
+        mark = f" ✅ (Догон {dogon})"
     elif result == "lose":
         mark = " ❌"
     elif result == "return":
         mark = " ♻️"
+    elif result == "cancelled":
+        mark = " ⛔ (аномалия #R)"
     else:
         mark = " ⚠️"
+
     return f"🎯 Игра: <b>#N{target}</b>: {suit}{mark}"
 
 
