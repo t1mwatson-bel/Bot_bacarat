@@ -251,7 +251,7 @@ def add_game_offset(number, offset):
 
 
 # =====================================================================
-# ТРИГГЕР: 3 КАРТЫ ИГРОКА, 1-Я И 3-Я ЦИФРЫ, 1-Я > 3-Я
+# ТРИГГЕР: 2 КАРТЫ ДИЛЕРА, ПЕРВАЯ ЦИФРА 2..9
 # =====================================================================
 
 def find_trigger(game):
@@ -259,44 +259,58 @@ def find_trigger(game):
     Проверяет, есть ли триггер в игре.
 
     Условия:
-      - у игрока ровно 3 карты
-      - 1-я карта — цифра 2..9
-      - 3-я карта — цифра 2..9
-      - 1-я карта СТАРШЕ 3-й (по номиналу)
+      - у дилера ровно 2 карты
+      - идём слева направо, берём первую карту-цифру 2..9
+        (10, J, Q, K, A пропускаем)
+      - целевая игра — ближайшая строго > текущей,
+        оканчивающаяся на цифру триггерной карты
+      - масть прогноза — масть триггерной карты
 
-    Возвращает dict {'trigger_card', 'third_card', 'predicted_suit'} или None.
+    Возвращает dict:
+      {
+          "trigger_card":   "6♠️",
+          "current_game":   1024,
+          "target_game":    1026,
+          "dogon":          0,
+          "predicted_suit": "♠️",
+      }
+    или None, если триггера нет.
     """
 
-    player = game.get("player_cards", [])
+    dealer = game.get("dealer_cards", [])
 
-    if len(player) != 3:
+    if len(dealer) != 2:
         return None
 
-    first = player[0]
-    third = player[2]
+    trigger_card = None
 
-    first_rank = normalize_rank(first.get("rank"))
-    third_rank = normalize_rank(third.get("rank"))
+    for card in dealer:
+        rank = normalize_rank(card.get("rank"))
+        if rank in DIGIT_RANKS:
+            trigger_card = card
+            break
 
-    # Обе карты должны быть цифрами 2..9
-    if first_rank not in DIGIT_RANKS:
+    if not trigger_card:
         return None
 
-    if third_rank not in DIGIT_RANKS:
-        return None
-
-    # Первая должна быть СТАРШЕ третьей
-    if int(first_rank) <= int(third_rank):
-        return None
-
-    predicted_suit = normalize_suit(third.get("suit"))
+    digit = int(normalize_rank(trigger_card.get("rank")))
+    predicted_suit = normalize_suit(trigger_card.get("suit"))
 
     if not predicted_suit:
         return None
 
+    current_game = int(game["game_number"])
+
+    # Ближайшая игра СТРОГО больше текущей с концом = digit
+    target_game = current_game + ((digit - current_game) % 10)
+    if target_game == current_game:
+        target_game += 10
+
     return {
-        "trigger_card": card_to_text(first),
-        "third_card": card_to_text(third),
+        "trigger_card":   card_to_text(trigger_card),
+        "current_game":   current_game,
+        "target_game":    target_game,
+        "dogon":          target_game - current_game,
         "predicted_suit": predicted_suit,
     }
 
