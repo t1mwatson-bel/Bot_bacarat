@@ -129,11 +129,15 @@ def load_predictions():
 def save_predictions():
     try:
         tmp = PREDICTIONS_FILE + ".tmp"
+
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(predictions, f, ensure_ascii=False, indent=2)
+
         os.replace(tmp, PREDICTIONS_FILE)
+        print(f"💾 [СОХРАНЕНИЕ] Успешно сохранено прогнозов: {len(predictions)} в {PREDICTIONS_FILE}", flush=True)
+
     except Exception as e:
-        print(f"⚠️ Ошибка сохранения прогнозов: {e}", flush=True)
+        print(f"🔥 [КРИТИЧЕСКАЯ ОШИБКА СОХРАНЕНИЯ] Не удалось сохранить {PREDICTIONS_FILE}: {e}", flush=True)
 
 
 # =====================================================================
